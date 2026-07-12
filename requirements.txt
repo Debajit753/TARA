@@ -1,0 +1,35 @@
+# --- core ---
+numpy
+pandas
+scipy
+matplotlib
+
+# --- astronomy data ---
+lightkurve
+astropy
+astroquery
+
+# --- detrending & transit search ---
+wotan
+transitleastsquares
+
+# --- parameter fitting + uncertainty ---
+batman-package
+emcee
+
+# --- machine learning ---
+scikit-learn
+xgboost
+torch
+
+# --- explainability ---
+shap
+captum
+
+# --- blend / pixel analysis ---
+photutils
+
+# --- backend API ---
+fastapi
+uvicorn[standard]
+pydantic

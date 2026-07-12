@@ -1,0 +1,191 @@
+/* Dashboard-only components (dash-workspace.html). */
+@layer components {
+
+/* top-bar extras only the dashboard has */
+.top .search{@apply ml-auto flex items-center gap-2; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px 12px; width:290px}
+.top .search input{border:none; background:none; outline:none; font-family:var(--mono); font-size:12.5px; flex:1; color:var(--ink)}
+.top .search kbd{font-family:var(--mono); font-size:10px; color:var(--faint); border:1px solid var(--line2); border-radius:4px; padding:0 5px}
+.runstat{@apply flex items-center; gap:14px; font-family:var(--mono); font-size:11px; color:var(--mut)}
+.runstat b{color:var(--ink)}
+.mode{@apply flex items-center gap-1.5}
+.mode .md{width:8px; height:8px; border-radius:50%; background:var(--green)}
+.mode.off .md{background:var(--red)}
+
+/* shell */
+.shell{display:grid; grid-template-columns:300px 1fr; min-height:calc(100vh - 52px)}
+
+/* queue */
+.queue{background:var(--card); border-right:1px solid var(--line); padding:14px 0 20px; overflow-y:auto}
+.q-head{@apply flex items-center gap-2; padding:2px 16px 10px}
+.q-head h2{font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--mut)}
+.q-head .count{@apply ml-auto; font-family:var(--mono); font-size:11px; color:var(--faint)}
+.filters{@apply flex flex-wrap; gap:6px; padding:0 16px 12px}
+.fpill{font-size:11px; font-weight:500; border:1px solid var(--line); background:var(--card); border-radius:20px; padding:3px 10px; color:var(--mut); cursor:pointer}
+.fpill.on{background:var(--ink); color:#fff; border-color:var(--ink)}
+[data-theme="dark"] .fpill.on{color:var(--bg)}
+.qgroup{@apply flex items-center cursor-pointer select-none; padding:12px 16px 4px; gap:7px}
+.qgroup .tri{font-size:9px; color:var(--faint); transition:transform .15s; display:inline-block}
+.qgroup.closed .tri{transform:rotate(-90deg)}
+.qgroup h4{font-size:10.5px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; color:var(--faint)}
+.qgroup .gc{@apply ml-auto; font-family:var(--mono); font-size:10px; color:var(--faint)}
+.trow{display:grid; grid-template-columns:1fr auto; gap:2px 10px; padding:10px 16px; cursor:pointer; border-left:3px solid transparent}
+.trow:hover{background:var(--hover)}
+.trow.active{background:var(--indigo-bg); border-left-color:var(--indigo)}
+.trow .name{font-weight:600; font-size:13.5px}
+.trow .name .rv{color:var(--green); font-size:11px; margin-left:4px}
+.trow .tic{font-family:var(--mono); font-size:10.5px; color:var(--faint)}
+.trow .spark{grid-row:1/3; align-self:center}
+.trow .spark canvas{width:72px; height:26px; display:block}
+.trow .meta{grid-column:1/3; @apply flex items-center gap-2; margin-top:4px}
+.chip{font-size:10px; font-weight:600; letter-spacing:.04em; border-radius:4px; padding:1.5px 7px}
+.chip.transit{color:var(--teal); background:var(--teal-bg)}
+.chip.fp{color:var(--amber); background:var(--amber-bg)}
+.chip.noise{color:var(--mut); background:var(--gray-bg)}
+.chip.blend{color:var(--violet); background:var(--violet-bg)}
+.chip.pending{color:var(--faint); background:var(--gray-bg)}
+.trow .conf{font-family:var(--mono); font-size:10.5px; color:var(--mut)}
+.q-import{padding:12px 16px 0}
+.q-import button{@apply w-full cursor-pointer; border:1px dashed var(--line2); background:none; border-radius:8px; padding:9px; font-size:12.5px; font-weight:500; color:var(--mut); font-family:var(--sans)}
+.q-import button:hover{color:var(--ink); border-color:var(--faint)}
+.q-note{padding:12px 16px; font-size:12.5px; color:var(--mut); line-height:1.55}
+.q-note code{font-family:var(--mono); font-size:11px; background:var(--bg); border:1px solid var(--line); border-radius:5px; padding:1px 5px}
+
+/* main */
+.main{padding:20px 24px 40px; min-width:0}
+.t-head{@apply flex items-center flex-wrap; gap:14px}
+.t-head h1{font-size:21px; font-weight:700}
+.t-head .tic{font-family:var(--mono); font-size:12px; color:var(--mut); background:var(--card); border:1px solid var(--line); padding:3px 9px; border-radius:6px}
+.verdict-pill{@apply inline-flex items-center; gap:7px; font-weight:600; font-size:13px; border-radius:8px; padding:6px 13px}
+.verdict-pill .dot{width:8px; height:8px; border-radius:50%}
+.verdict-pill.transit{color:var(--teal); background:var(--teal-bg)} .verdict-pill.transit .dot{background:var(--teal)}
+.verdict-pill.fp{color:var(--amber); background:var(--amber-bg)} .verdict-pill.fp .dot{background:var(--amber)}
+.verdict-pill.noise{color:var(--mut); background:var(--gray-bg)} .verdict-pill.noise .dot{background:var(--faint)}
+.verdict-pill.blend{color:var(--violet); background:var(--violet-bg)} .verdict-pill.blend .dot{background:var(--violet)}
+.t-head .conf{font-family:var(--mono); font-size:13px; color:var(--mut)}
+.t-head .actions{@apply ml-auto flex gap-2}
+.btn{font-size:12.5px; font-weight:500; border:1px solid var(--line2); background:var(--card); border-radius:8px; padding:7px 13px; cursor:pointer; color:var(--ink)}
+.btn.primary{background:var(--indigo); border-color:var(--indigo); color:#fff}
+.btn:disabled{opacity:.45; cursor:default}
+
+/* notices */
+.notice{@apply hidden items-center; gap:10px; margin-top:14px; border-radius:10px; padding:11px 14px; font-size:13px; font-weight:500}
+.notice.show{display:flex}
+.notice.info{background:var(--indigo-bg); color:var(--indigo)}
+.notice.warn{background:var(--amber-bg); color:var(--amber)}
+.notice.err{background:var(--red-bg); color:var(--red)}
+.spin{width:14px; height:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; flex:none; animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+
+/* pipeline trace */
+.trace{@apply flex items-center; gap:0; margin:16px 0 18px; background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 14px; overflow-x:auto}
+.step{@apply flex items-center whitespace-nowrap; gap:8px; font-size:12px}
+.step .ok{@apply flex items-center justify-center; width:15px; height:15px; border-radius:50%; background:var(--teal-bg); color:var(--teal); font-size:9px; font-weight:700}
+.step b{font-weight:600}
+.step span{font-family:var(--mono); font-size:10.5px; color:var(--faint)}
+.arrow{color:var(--line2); margin:0 12px; font-size:12px}
+.trace .total{@apply ml-auto whitespace-nowrap; font-family:var(--mono); font-size:11px; color:var(--mut); padding-left:14px}
+.trace .total b{color:var(--teal)}
+
+/* tabs */
+.tabs{@apply flex; gap:2px; border-bottom:1px solid var(--line2); margin-bottom:18px}
+.tab{font-size:13.5px; font-weight:500; color:var(--mut); padding:9px 16px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px}
+.tab:hover{color:var(--ink)}
+.tab.on{color:var(--indigo); border-bottom-color:var(--indigo); font-weight:600}
+.tabpane{display:none}
+.tabpane.on{display:block}
+
+/* overview */
+.propstrip{@apply flex flex-wrap; gap:8px; margin-bottom:12px}
+.propstrip .p{font-size:11.5px; color:var(--mut); background:var(--card); border:1px solid var(--line); border-radius:7px; padding:4px 10px}
+.propstrip .p b{color:var(--ink); font-family:var(--mono); font-weight:600; font-size:11px; margin-left:5px}
+.ov-grid{display:grid; grid-template-columns:repeat(4,1fr); gap:12px}
+.stat{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px}
+.stat .k{font-size:11px; font-weight:500; letter-spacing:.06em; text-transform:uppercase; color:var(--faint)}
+.stat .v{font-family:var(--mono); font-size:22px; font-weight:600; margin-top:6px}
+.stat .v small{font-size:12px; color:var(--mut); font-weight:400}
+.stat .v .pm{font-size:11px; color:var(--faint); font-weight:400}
+.stat .s{font-size:11.5px; color:var(--mut); margin-top:4px}
+.ov-main{display:grid; grid-template-columns:1.6fr 1fr; gap:12px; margin-top:12px}
+.card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px}
+.card h3{@apply flex items-center; font-size:12px; font-weight:600; letter-spacing:.07em; text-transform:uppercase; color:var(--mut); margin-bottom:12px}
+.card h3 .lg{@apply ml-auto flex; gap:12px; font-size:10px; font-family:var(--mono); letter-spacing:0; text-transform:none; color:var(--faint)}
+.card h3 .lg i{display:inline-block; width:8px; height:3px; border-radius:2px; margin-right:5px; vertical-align:middle}
+.cv-fold{height:280px} .cv-fold canvas,.cv-lc canvas,.cv-pg canvas{width:100%; height:100%; display:block}
+.probrows{@apply flex flex-col; gap:12px; margin-top:4px}
+.pr{display:grid; grid-template-columns:100px 1fr 46px; gap:10px; align-items:center; font-size:12.5px}
+.pr .n{color:var(--mut)}
+.pr .track{display:block; height:8px; border-radius:5px; background:var(--bg); overflow:hidden}
+.pr .fill{display:block; height:100%; border-radius:5px}
+.pr .v{font-family:var(--mono); font-size:12px; text-align:right}
+.probnote{font-size:12px; color:var(--mut); line-height:1.5; margin-top:11px; padding-top:11px; border-top:1px solid var(--line)}
+.cnnrow{margin-top:12px; padding-top:12px; border-top:1px solid var(--line)}
+.cnnrow .r{@apply flex items-center; font-size:12.5px}
+.cnnrow .r .n{color:var(--mut)}
+.cnnrow .r b{@apply ml-auto; font-family:var(--mono); font-size:12px; font-weight:600}
+.cnnrow .note{font-size:11.5px; color:var(--faint); line-height:1.5; margin-top:5px}
+
+/* vetting summary (overview card) */
+.chk{padding:8px 0; border-top:1px solid var(--line)}
+.chk:first-child{border-top:none}
+.chkrow{@apply flex items-center; gap:9px; font-size:13px}
+.chkrow .st{@apply flex items-center justify-center flex-none; width:16px; height:16px; border-radius:50%; font-size:9px; font-weight:700}
+.chkrow .st.ok{background:var(--teal-bg); color:var(--teal)}
+.chkrow .st.bad{background:var(--red-bg); color:var(--red)}
+.chkrow .val{@apply ml-auto; font-family:var(--mono); font-size:12px; color:var(--mut)}
+.chksub{font-size:11.5px; color:var(--faint); margin:3px 0 0 25px; line-height:1.45}
+.chksub b{font-weight:600}
+.summary-strip{margin-top:12px; border-radius:8px; padding:9px 12px; font-size:12.5px; font-weight:500; line-height:1.5}
+.summary-strip.warn{background:var(--amber-bg); color:var(--amber)}
+.summary-strip.good{background:var(--teal-bg); color:var(--teal)}
+.summary-strip.bad{background:var(--red-bg); color:var(--red)}
+
+/* info tooltip */
+.info{@apply relative inline-flex align-middle; margin-left:7px; cursor:help}
+.info .ic{@apply flex items-center justify-center; width:14px; height:14px; border-radius:50%; border:1px solid var(--line2); color:var(--faint); font-size:9px; font-family:var(--mono)}
+.info .tip{@apply hidden absolute z-20; top:20px; right:-10px; width:290px; background:var(--card); border:1px solid var(--line2); border-radius:10px; padding:11px 13px; font-size:12px; line-height:1.55; color:var(--mut); box-shadow:0 8px 24px rgba(0,0,0,.14); text-transform:none; letter-spacing:0; font-weight:400}
+.info:hover .tip{display:block}
+
+/* vetting tab */
+.vet-grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+.vetcard{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px}
+.vetcard .h{@apply flex items-center; gap:9px; font-weight:600; font-size:14.5px}
+.vetcard .h .val{@apply ml-auto; font-family:var(--mono); font-size:16px}
+.vetcard.ok .h .val{color:var(--teal)} .vetcard.bad .h .val{color:var(--red)}
+.vetcard .tests{font-size:12.5px; color:var(--mut); margin-top:8px; line-height:1.55}
+.vetcard .result{font-size:13px; margin-top:8px; padding:8px 11px; border-radius:7px; line-height:1.5}
+.vetcard.ok .result{background:var(--teal-bg); color:#0b6b60}
+[data-theme="dark"] .vetcard.ok .result{color:var(--teal)}
+.vetcard.bad .result{background:var(--red-bg); color:var(--red)}
+.vetcard .thr{font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-top:8px}
+.vet-empty{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; font-size:13px; color:var(--mut); line-height:1.6}
+
+/* signals + data tabs */
+.sig-grid{display:grid; grid-template-columns:1fr; gap:12px}
+.cv-lc{height:240px} .cv-pg{height:240px}
+.data-grid{display:grid; grid-template-columns:1.5fr 1fr; gap:12px; align-items:start}
+table.data{width:100%; border-collapse:collapse}
+table.data th{text-align:left; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:8px 4px; border-bottom:1px solid var(--line2)}
+table.data td{padding:8.5px 4px; border-bottom:1px solid var(--line); font-size:13px}
+table.data td.mono{font-family:var(--mono); font-size:12.5px}
+table.data td.note{color:var(--mut); font-size:12px}
+pre.json{background:#14161c; color:#c9d4e8; border-radius:10px; padding:16px; font-family:var(--mono); font-size:11.5px; line-height:1.65; overflow:auto; margin-top:12px; max-height:420px}
+pre.json .k{color:#7c93ff} pre.json .s{color:#7fd7a8} pre.json .n{color:#ffc857}
+
+/* chart hover tooltip */
+.charttip{@apply fixed hidden whitespace-nowrap; z-index:60; pointer-events:none; background:var(--card); border:1px solid var(--line2); border-radius:8px; padding:6px 9px; font-family:var(--mono); font-size:11px; color:var(--ink); box-shadow:0 6px 18px rgba(0,0,0,.14)}
+
+/* offline / empty states */
+.offline{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:22px; max-width:560px; margin-top:18px}
+.offline h2{font-size:16px; margin-bottom:8px}
+.offline p{font-size:13px; color:var(--mut); line-height:1.6; margin-bottom:10px}
+.offline code{font-family:var(--mono); font-size:12px; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:2px 7px}
+
+/* responsive */
+@media(max-width:1100px){
+  .shell{grid-template-columns:1fr}
+  .queue{display:none}
+  .ov-grid{grid-template-columns:1fr 1fr}
+  .ov-main,.vet-grid,.data-grid{grid-template-columns:1fr}
+}
+
+}
