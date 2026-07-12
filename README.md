@@ -1,4 +1,4 @@
-<h1 align="center">⭐ TARA — Transit Analysis & Recognition AI</h1>
+<h1 align="center"> TARA — Transit Analysis & Recognition AI</h1>
 
 <p align="center">
   <b>AI-powered detection & classification of exoplanets from noisy light curves</b><br>
