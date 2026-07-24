@@ -1,7 +1,0 @@
-/* dash-workspace.html's stylesheet source → compiled to dash-workspace.css */
-@import "./_tokens.css";
-@import "./_nav.css";
-@import "./_dash.css";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;

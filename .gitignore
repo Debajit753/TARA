@@ -1,34 +1,27 @@
 # Python
-.venv/
 __pycache__/
 *.pyc
-*.pyo
+.venv/
+venv/
 *.egg-info/
-dist/
-build/
-*.egg
+.ipynb_checkpoints/
 
-# Runtime data
-backend/data/cache/
-backend/data/uploads/
+# Data & models (large / regenerable — keep out of git)
+backend/data/raw/
+backend/data/processed/
+*.pt
+*.fits
+*.npz
+quickstart_result.png
 
-# Node (only used for CSS rebuild)
-node_modules/
+# ...but the SERVING model weights MUST ship, or the app can't load its models
+!backend/app/models/mixed/cnn_mixed_seed*.pt
+!backend/app/models/mixed/scalar_norm_mixed.npz
 
-# Environment
-.env
-.env.local
+# Frontend
+frontend/node_modules/
+frontend/dist/
 
-# OS
+# OS / editor
 .DS_Store
-Thumbs.db
-desktop.ini
-
-# Logs
-*.log
-
-# IDE
 .vscode/
-.idea/
-*.swp
-*.swo

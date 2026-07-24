@@ -1,10 +1,12 @@
 [
-  { "tic": "TIC 100100827", "name": "WASP-18",   "desc": "hot Jupiter — deep 0.94 d transit", "cls": "transit" },
-  { "tic": "TIC 261136679", "name": "Pi Mensae", "desc": "bright naked-eye planet host",      "cls": "transit" },
-  { "tic": "TIC 25155310",  "name": "WASP-126",  "desc": "confirmed transiting planet",       "cls": "transit" },
-  { "tic": "TIC 231663901", "name": "WASP-46",   "desc": "short-period hot Jupiter",          "cls": "transit" },
-  { "tic": "TIC 182943944", "name": "TOI FP",    "desc": "known false positive",              "cls": "false_positive" },
-  { "tic": "TIC 168789840", "name": "EB",        "desc": "eclipsing binary system",           "cls": "false_positive" },
-  { "tic": "TIC 47384844",  "name": "quiet star","desc": "no significant signal",             "cls": "noise" },
-  { "tic": "TIC 259863352", "name": "noisy star","desc": "stellar variability only",          "cls": "noise" }
+  { "tic": "TIC 100100827", "name": "WASP-18",     "desc": "hot Jupiter — deep 0.94 d transit",                                  "cls": "transit" },
+  { "tic": "TIC 261136679", "name": "Pi Mensae",   "desc": "bright naked-eye planet host",                                       "cls": "transit" },
+  { "tic": "TIC 25155310",  "name": "WASP-126",    "desc": "confirmed transiting planet — high-confidence detection",            "cls": "transit" },
+  { "tic": "TIC 231663901", "name": "WASP-46",     "desc": "short-period hot Jupiter",                                           "cls": "transit" },
+  { "tic": "TIC 47384844",  "name": "TOI-1022",    "desc": "real but shallow candidate — TARA flags uncertain (honest-limit demo)", "cls": "transit" },
+  { "tic": "TIC 168789840", "name": "eclipsing binary", "desc": "two stars eclipsing — TARA classifies it as eclipsing binary",  "cls": "false_positive" },
+  { "tic": "TIC 149623590", "name": "grazing eclipse",  "desc": "grazing stellar eclipse mimicking a transit — caught as EB",    "cls": "false_positive" },
+  { "tic": "TIC 182943944", "name": "false positive",   "desc": "known false positive, photometrically planet-like — honest limit", "cls": "false_positive" },
+  { "tic": "TIC 259863352", "name": "variable star",    "desc": "stellar variability only — no transit found",                  "cls": "noise" },
+  { "tic": "TIC 238196627", "name": "noisy star",       "desc": "no periodic dip above the noise floor",                        "cls": "noise" }
 ]

@@ -80,6 +80,10 @@ def extract_features(lc, candidate, n_global=201, n_local=61):
         "secondary_ratio": float(sec_ratio),
         "v_shape": float(v_shape),
         "n_transits": int(np.unique(epoch[in_tr]).size),
+        # variability features (v3): describe the REST of the curve, not the dip —
+        # a variable star that phases into a clean-looking dip still has a messy baseline
+        "oot_scatter": float(sigma),
+        "p2p_rms": float(np.sqrt(np.mean(np.diff(flux) ** 2))) if len(flux) > 2 else 0.0,
     }
     global_view = _binned(ph, flux, 0.5, n_global)
     local_view = _binned(ph, flux, max(2 * dur_frac, 0.05), n_local)

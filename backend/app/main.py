@@ -19,7 +19,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.pipeline.preprocess import load_raw, clean_lc
-from app.pipeline.search import fast_search
+from app.pipeline.search import fast_search, deep_search
 from app.pipeline.features import extract_features
 from app.pipeline.blend import centroid_shift
 
@@ -146,20 +146,33 @@ def _cnn_verdict(lc, cand, feats, meta):
 
 # ---------- core pipeline (used by the endpoint AND the precompute script) ----------
 
-def run_analysis(tic_id: str) -> dict:
+def run_analysis(tic_id: str, deep: bool = False) -> dict:
     # per-stage wall-clock timings (ms) — shown live in the dashboard's pipeline trace
     tm = {}
     _t0 = time.perf_counter()
     raw = load_raw(tic_id);                    tm["load"] = time.perf_counter() - _t0
-    return _analyze_raw(raw, tic_id, tm, _t0)
+    return _analyze_raw(raw, tic_id, tm, _t0, deep=deep)
 
 
-def _analyze_raw(raw, tic_id, tm, _t0) -> dict:
+def _analyze_raw(raw, tic_id, tm, _t0, deep: bool = False) -> dict:
     """Shared pipeline body — used by /analyze (MAST download) and /analyze-file (upload)."""
     _t = time.perf_counter()
     lc = clean_lc(raw);                        tm["clean"] = time.perf_counter() - _t
     _t = time.perf_counter()
-    cand, pgdata = fast_search(lc);            tm["search"] = time.perf_counter() - _t   # one search, periodogram reused
+    cand, pgdata = fast_search(lc)             # fast two-stage search
+    search_note = None
+    if deep:
+        # thorough full-range TLS (3-min cap) — recovers real periods the fast search
+        # aliases on shallow candidates. Keep it only if it beats the fast SDE.
+        dcand = deep_search(lc, cap_seconds=180)
+        if dcand and dcand.get("power", 0) > cand.get("power", 0) + 0.5:
+            search_note = (f"deep search improved the period {cand['period']:.4f} d → "
+                           f"{dcand['period']:.4f} d (SDE {cand.get('power',0):.1f} → {dcand['power']:.1f})")
+            cand = dcand
+        else:
+            search_note = "deep search ran — no better period found (or hit the 3-min cap)"
+        pgdata["best"] = cand["period"]
+    tm["search"] = time.perf_counter() - _t
     _t = time.perf_counter()
     feats, _, _ = extract_features(lc, cand);  tm["features"] = time.perf_counter() - _t
     _t = time.perf_counter()
@@ -196,11 +209,16 @@ def _analyze_raw(raw, tic_id, tm, _t0) -> dict:
     # SNR >= 7.0 mirrors the standard TESS/Kepler detection threshold (~7.1):
     # below it, pipelines don't even report a signal — classifying one is noise-fitting
     detected = (n_tr >= 1) and (depth_f > 0) and (snr >= 7.0)
+    # "confident" only if the top class clearly wins — otherwise the model is
+    # essentially guessing (near-uniform probs) and a class badge would over-claim.
+    _ps = sorted(proba, reverse=True)
+    _margin = float(_ps[0] - (_ps[1] if len(_ps) > 1 else 0.0))
     cls = {
         "label": classes[top],
         "confidence": round(float(proba[top]), 3),
         "probabilities": {c: round(float(p), 3) for c, p in zip(classes, proba)},
         "detected": bool(detected),
+        "confident": bool(detected and _ps[0] >= 0.40 and _margin >= 0.10),
     }
     if not detected:
         cls["label"] = "noise"
@@ -219,9 +237,34 @@ def _analyze_raw(raw, tic_id, tm, _t0) -> dict:
     pp, ppow = _pair(pgdata["p"], pgdata["power"], 400)
     try:
         fold = lc.fold(period=cand["period"], epoch_time=cand["t0"], normalize_phase=True)
-        fph, ff = _pair(fold.phase.value, fold.flux.value, 500)
+        pha = np.asarray(fold.phase.value, float)
+        fla = np.asarray(fold.flux.value, float)
+        g = np.isfinite(pha) & np.isfinite(fla)
+        pha, fla = pha[g], fla[g]
+        # Scatter for the chart: keep EVERY point near the transit (the zoomed window
+        # the UI shows), and only thin the far-off baseline. This gives the dense,
+        # real folded curve instead of a sparse downsample across the whole phase.
+        near = np.abs(pha) <= 0.30
+        i_near = np.where(near)[0]
+        i_far = np.where(~near)[0]
+        if len(i_near) > 6000:                     # generous cap so canvas stays snappy
+            i_near = i_near[np.linspace(0, len(i_near) - 1, 6000).astype(int)]
+        if len(i_far) > 800:                       # baseline is just context — thin it
+            i_far = i_far[np.linspace(0, len(i_far) - 1, 800).astype(int)]
+        keep = np.sort(np.concatenate([i_near, i_far]))
+        fph = [round(float(v), 6) for v in pha[keep]]
+        ff = [round(float(v), 6) for v in fla[keep]]
+        # binned medians from the FULL fold (not the scatter above)
+        nb = 240
+        idxb = np.clip(np.digitize(pha, np.linspace(-0.5, 0.5, nb + 1)) - 1, 0, nb - 1)
+        bph, bf = [], []
+        for b in range(nb):
+            v = fla[idxb == b]
+            if len(v) >= 3:
+                bph.append(round(float(-0.5 + (b + 0.5) / nb), 4))
+                bf.append(round(float(np.median(v)), 6))
     except Exception:
-        fph, ff = [], []
+        fph, ff, bph, bf = [], [], [], []
     period = cand["period"]; durf = (cand["duration"] / period) if period else 0.05
     depth = feats.get("depth", 0) or 0
     mph = np.linspace(-0.5, 0.5, 220)
@@ -241,6 +284,7 @@ def _analyze_raw(raw, tic_id, tm, _t0) -> dict:
         "tic_id": tic_id,
         "target": meta,
         "timings": {k: round(v * 1000.0, 1) for k, v in tm.items()},   # ms
+        "search_note": search_note,
         "classification": cls,
         "cnn": cnn,
         "parameters": {k: rnd(v) for k, v in feats.items()},
@@ -249,7 +293,8 @@ def _analyze_raw(raw, tic_id, tm, _t0) -> dict:
         "charts": {
             "light_curve": {"t": lt, "f": lf},
             "periodogram": {"p": pp, "power": ppow, "best": round(float(period), 4)},
-            "fold": {"ph": fph, "f": ff, "model_ph": [round(float(p), 4) for p in mph], "model_f": mf},
+            "fold": {"ph": fph, "f": ff, "bph": bph, "bf": bf,
+                     "model_ph": [round(float(p), 4) for p in mph], "model_f": mf},
         },
     }
 
@@ -287,27 +332,33 @@ def _finite(o):
 
 
 @app.post("/analyze")
-def analyze(tic_id: str, refresh: bool = False):
+def analyze(tic_id: str, refresh: bool = False, deep: bool = False):
     cp = _cache_path(tic_id)
-    if not refresh and os.path.exists(cp):
-        with open(cp) as f:
-            out = json.load(f)
-        out["cached"] = True
-        return _finite(out)
+    if not refresh and not deep and os.path.exists(cp):
+        try:
+            with open(cp) as f:
+                out = json.load(f)
+            out["cached"] = True
+            return _finite(out)
+        except (ValueError, OSError):
+            pass          # corrupt/truncated cache -> fall through and recompute (self-heals)
     try:
-        out = _finite(run_analysis(tic_id))
+        out = _finite(run_analysis(tic_id, deep=deep))   # deep = thorough 3-min search
     except Exception as e:
         return {"tic_id": tic_id, "error": f"{type(e).__name__}: {e}"}
-    with open(cp, "w") as f:
+    # atomic write: a crash mid-write can never leave a truncated file that 500s forever
+    tmp = cp + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(out, f)
+    os.replace(tmp, cp)
     return out
 
 
 @app.post("/analyze-file")
 async def analyze_file(request: Request, name: str = "upload.fits"):
-    """Analyze an UPLOADED light-curve FITS file (the finale scenario: ISRO hands
-    us files instead of TIC IDs). Raw body = the file bytes; same pipeline as
-    /analyze, just skipping the MAST download."""
+    """Analyze an UPLOADED light-curve FITS file (files instead of TIC IDs).
+    Raw body = the file bytes; same pipeline as /analyze, just skipping the
+    MAST download."""
     data = await request.body()
     if not data:
         return {"error": "empty file"}

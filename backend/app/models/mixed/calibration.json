@@ -1,0 +1,9 @@
+{
+ "temperature": 1.5502,
+ "n_scalars": 11,
+ "n_seeds": 5,
+ "fitted_on": "grouped held-out, random_state=42",
+ "n_test": 2731,
+ "ece_before": 0.0381,
+ "ece_after": 0.0248
+}

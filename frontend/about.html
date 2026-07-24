@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About TARA</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="about.css"><!-- this page's own compiled Tailwind CSS — see build-tw.sh -->
+</head>
+<body class="page-about">
+
+<div class="top">
+  <span class="logo">TARA<span>.</span></span>
+  <span class="divider"></span>
+  <span class="crumb">About</span>
+  <a class="back" href="dash-workspace.html">← Back to workspace</a>
+  <button class="iconbtn" id="menuBtn" title="Menu" aria-label="Menu"><span class="hamb"><i></i><i></i><i></i></span></button>
+  <div class="menu" id="menu">
+    <div class="mi" id="mBack"><span class="ico">←</span>Workspace<span class="sub">dashboard</span></div>
+    <div class="mi" id="mTheme"><span class="ico" id="mThemeIco">☽</span><span id="mThemeTxt">Dark mode</span><span class="sub">theme</span></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="hero">
+    <h1>About TARA</h1>
+    <p>Transit Analysis &amp; Recognition AI · तारा<br><i>AI-enabled detection &amp; classification of exoplanets from noisy TESS light curves.</i></p>
+  </div>
+
+  <div class="card">
+    <h2>What it does</h2>
+    <p>When a planet crosses in front of its star, the star gets very slightly dimmer for a few hours — a <b>transit</b>. TARA watches a star's brightness over time (its <b>light curve</b>) and hunts for that tiny repeating dip.</p>
+    <p>For any TESS star — or an uploaded FITS file — it finds the repeating dip, classifies it as a <b>planet transit</b>, <b>false positive</b> (usually two stars eclipsing each other), or <b>noise</b>, measures the transit with real ±1σ error bars, and shows the evidence behind every verdict. It is a candidate-finder and first-pass vetter — the same role automated pipelines play at NASA — not a final arbiter.</p>
+  </div>
+
+  <div class="card">
+    <h2>How the pipeline works</h2>
+    <ol>
+      <li><b>load</b> — fetch the light curve from NASA's MAST archive; if no ready-made curve exists, extract one from the full-frame images. Uploaded FITS files skip this entirely.</li>
+      <li><b>clean</b> — normalize, remove the star's slow brightness trends, clip outliers.</li>
+      <li><b>search</b> — a coarse BLS scan over all trial periods, then TLS refines the best one using a realistic limb-darkened transit shape.</li>
+      <li><b>features</b> — measure depth, duration, signal-to-noise, and the four vetting diagnostics.</li>
+      <li><b>centroid</b> — check whether the star's light-centre shifts during the dip (the signal would belong to a neighbouring star).</li>
+      <li><b>fit</b> — a trapezoid fit on the folded curve gives ±1σ uncertainties on period, depth and duration.</li>
+      <li><b>cnn</b> — a 5-seed deep-learning ensemble reads the folded light curve directly, as a second opinion.</li>
+      <li><b>classify</b> — a RandomForest turns the measurements into the primary verdict.</li>
+    </ol>
+    <p style="margin-top:10px">Every analysed star shows this trace live in the dashboard's <b>Pipeline</b> tab, with real per-stage times. A fresh star takes ~15–90 s (dominated by the NASA download + period search); cached stars answer in milliseconds.</p>
+  </div>
+
+  <div class="card">
+    <h2>How the model was built</h2>
+    <p>Two models work together. The <b>RandomForest</b> classifies from 12 measured physics features (depth, U-vs-V shape, secondary eclipse, odd–even difference, centroid shift, baseline variability…) into <b>four classes</b> — transit / eclipsing binary / blend / noise — trained on <span class="num">5,950</span> labeled stars (TESS transits + cross-mission negatives incl. <span class="num">1,256</span> blends from Kepler's robovetter flags), features measured by this same pipeline. The <b>deep-learning model</b> is a multimodal 1D-CNN: two convolution branches read the phase-folded light curve — a wide "global" view (2001 bins) and a zoomed "local" view (201 bins) — while a third branch reads 11 stellar/transit parameters.</p>
+    <p>The CNN was trained <b>cross-mission</b>: <span class="num">6,923</span> Kepler stars (DR25 catalog — confirmed planets vs known false positives) <b>plus</b> <span class="num">~7,300</span> labeled TESS signals (ExoFOP TOI dispositions + NASA's ExoMiner++ catalog). The train/test split is <b>grouped by star</b>, so no star ever appears in both — the honest way to score (we caught and fixed three leakage traps getting here).</p>
+    <table class="data">
+      <tr><th>Result</th><th>Score</th><th>Note</th></tr>
+      <tr><td>Cross-mission ensemble (Kepler + TESS)<span class="tag good">headline</span></td><td class="mono">AUC 0.951</td><td>held-out, grouped split, 5 seeds; probabilities temperature-calibrated (T=1.55, calibration error 0.038→0.025)</td></tr>
+      <tr><td>— on Kepler stars only</td><td class="mono">AUC 0.932</td><td>same model</td></tr>
+      <tr><td>— on TESS stars only</td><td class="mono">AUC 0.966</td><td>same model</td></tr>
+      <tr><td>4-class RandomForest v3.1 (live features)</td><td class="mono">AUC 0.953</td><td>grouped; 75.8% acc · auto-clears 38% of curves with 0 planets lost</td></tr>
+      <tr><td>Kepler tabular RandomForest</td><td class="mono">86.9% acc</td><td>8,054 KOIs, catalog features</td></tr>
+      <tr><td>Brand-new-catalog stress test<span class="tag warn">honest</span></td><td class="mono">AUC ~0.72</td><td>domain shift — see limits below</td></tr>
+      <tr><td>MCMC fit vs literature (WASP-18b)</td><td class="mono">0.94145 d</td><td>matches published 0.941452 d</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Honest limits</h2>
+    <ul>
+      <li>Some false positives are <b>photometrically indistinguishable</b> from planets — every check passes and both models say planet. Only follow-up observations (pixel difference-imaging, ground photometry, spectroscopy) resolve those. No light-curve-only system can, including NASA's.</li>
+      <li>Stars without a ready-made light curve fall back to <b>FFI extraction</b> — noisier data, so their diagnostics deserve less trust.</li>
+      <li>On a completely new catalog the score drops toward ~<span class="num">0.72</span> (domain shift — measured deliberately). Retraining on a curated in-distribution dataset brings performance back to ~<span class="num">0.95</span>.</li>
+      <li>If the search finds <b>no transit at all</b>, TARA says "noise — no signal" rather than letting the classifier guess on empty features.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Data &amp; tools</h2>
+    <p><b>Data:</b> NASA MAST (TESS light curves &amp; full-frame images) · TESS Input Catalog (star properties) · Kepler DR25 KOI catalog · ExoFOP TOI dispositions · NASA ExoMiner++ labeled catalog.</p>
+    <p><b>Stack:</b> lightkurve · Transit Least Squares · PyTorch · scikit-learn · batman + emcee (Bayesian fitting) · FastAPI. The dashboard is dependency-free HTML + canvas. Everything runs free on a laptop.</p>
+  </div>
+
+  <div class="footer">TARA · research prototype — classifications are candidate-level, not confirmations</div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+function setTheme(t){
+  document.documentElement.setAttribute('data-theme',t);
+  localStorage.setItem('tara-ws-theme',t);
+  $('mThemeIco').textContent=t==='dark'?'☀':'☽';
+  $('mThemeTxt').textContent=t==='dark'?'Light mode':'Dark mode';
+}
+$('menuBtn').onclick=e=>{e.stopPropagation();$('menu').classList.toggle('open')};
+$('mBack').onclick=()=>{location.href='dash-workspace.html'};
+$('mTheme').onclick=e=>{e.stopPropagation();
+  setTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')};
+document.addEventListener('click',e=>{
+  if(!$('menu').contains(e.target)&&e.target!==$('menuBtn'))$('menu').classList.remove('open')});
+addEventListener('keydown',e=>{if(e.key==='Escape')$('menu').classList.remove('open')});
+setTheme(localStorage.getItem('tara-ws-theme')||'light');
+</script>
+</body>
+</html>

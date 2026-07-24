@@ -50,6 +50,10 @@ def load_raw(tic_id: str, retries: int = 3):
                 if len(idx):
                     pick = search[int(idx[0])]
                     break
+            # NOTE: uses a single (the first) sector. Stitching all sectors was tested
+            # and did NOT help hard shallow candidates (e.g. TOI-1022) — the limit is
+            # the fast two-stage SEARCH locking a period alias, not the amount of data;
+            # a full TLS search would help but is too slow live on long baselines.
             return (pick if pick is not None else search[0]).download()
         except Exception as e:
             last_err = e
@@ -77,6 +81,14 @@ def load_raw(tic_id: str, retries: int = 3):
 
 
 def clean_lc(lc, window_length: int = 401, sigma: float = 5.0):
+    # zero-centered flux guard: some products deliver flux with median ~0 —
+    # normalize() would divide by ~0 and every measurement becomes garbage
+    f0 = np.asarray(lc.flux.value, float)
+    m0 = np.nanmedian(f0)
+    if (not np.isfinite(m0)) or m0 <= 0 or m0 < np.nanstd(f0):
+        raise ValueError("This star's light-curve product has zero-centered flux "
+                         "(unusable for relative photometry) — try again; a different "
+                         "product may be picked, or the star may need FFI extraction.")
     return (lc.remove_nans()
               .normalize()
               .flatten(window_length=window_length)

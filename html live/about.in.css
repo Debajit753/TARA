@@ -1,7 +1,0 @@
-/* about.html's stylesheet source → compiled to about.css */
-@import "./_tokens.css";
-@import "./_nav.css";
-@import "./_about.css";
-@tailwind base;
-@tailwind components;
-@tailwind utilities;

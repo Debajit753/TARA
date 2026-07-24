@@ -1,393 +1,213 @@
 <h1 align="center"> TARA — Transit Analysis & Recognition AI</h1>
 
-<p align="center">
-  <b>AI-powered detection & classification of exoplanets from noisy light curves</b><br>
-  <i>तारा — "star" in Sanskrit</i>
-</p>
+> An AI system that **detects and classifies exoplanet transits** in noisy TESS light curves — end to end, from a raw star to an honest verdict.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/PyTorch-CNN_Ensemble-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch">
-  <img src="https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/scikit--learn-RandomForest-F7931E?logo=scikit-learn&logoColor=white" alt="scikit-learn">
-  <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-</p>
+`Python 3.10+` · `FastAPI` · `PyTorch (CNN)` · `scikit-learn (RandomForest)` · `lightkurve` · `Transit Least Squares`
 
 ---
 
-When a planet crosses in front of its host star, the star dims by a tiny fraction for a few hours — a **transit**. TARA watches a star's brightness over time (its **light curve**), hunts for that repeating dip, and classifies it as a **planet transit**, **eclipsing binary**, **blend**, or **noise** — with full transparency into every step of the decision.
-
-It works on any TESS star (by TIC ID) or uploaded FITS file, runs a live 8-stage science pipeline, and delivers a verdict with interactive charts, vetting diagnostics, and ±1σ error bars. Think of it as an automated candidate-finder and first-pass vetter — the same role pipelines play at NASA.
-
----
-
-## Table of Contents
-
-- [How It Works — The Pipeline](#how-it-works--the-pipeline)
-- [Datasets](#datasets)
-- [Features Extracted](#features-extracted)
-- [Model Architecture](#model-architecture)
-- [Results](#results)
-- [Dashboard](#dashboard)
-- [Getting Started](#getting-started)
-- [Project Structure](#project-structure)
-- [Tech Stack](#tech-stack)
-- [Honest Limitations](#honest-limitations)
-- [License](#license)
+## Contents
+1. [The problem](#1-the-problem)
+2. [How TARA works — the pipeline](#2-how-tara-works--the-pipeline)
+3. [The two models](#3-the-two-models)
+4. [How the scoring works](#4-how-the-scoring-works)
+5. [Datasets](#5-datasets)
+6. [Results (honest)](#6-results-honest)
+7. [Codebase](#7-codebase)
+8. [Setup & run](#8-setup--run)
+9. [Honesty guards](#9-honesty-guards)
+10. [Limitations & future work](#10-limitations--future-work)
 
 ---
 
-## How It Works — The Pipeline
+## 1. The problem
 
-TARA runs an **8-stage pipeline** on every star, from raw data download to final classification:
+Space telescopes like **TESS** and **Kepler** watch a star's brightness over time, looking for the tiny, repeating dip that happens when a planet crosses ("transits") in front of it. The trouble is that the dip is shallow — a Jupiter is about a **1%** dip, an Earth closer to **0.01%** — and it competes with instrument noise, stellar wobble, and, worst of all, **impostors**: eclipsing binary stars and background blends that mimic a planet.
 
-```mermaid
-flowchart LR
-    A["🛰️ Load\nFetch from\nNASA MAST"] --> B["🧹 Clean\nNormalize\n& detrend"]
-    B --> C["🔍 Search\nBLS → TLS\nperiod search"]
-    C --> D["📐 Features\n9 physics\nmeasurements"]
-    D --> E["🎯 Centroid\nBlend check\n(in/out shift)"]
-    E --> F["📏 Fit\nTrapezoid ±1σ\nerror bars"]
-    F --> G["🧠 CNN\n5-seed ensemble\n(deep learning)"]
-    G --> H["🌳 Classify\nRandomForest\n4-class verdict"]
+TARA takes a raw light curve and answers two questions end to end:
 
-    style A fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style B fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style C fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style D fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style E fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style F fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style G fill:#1e3a5f,stroke:#4a9eff,color:#fff
-    style H fill:#1e3a5f,stroke:#4a9eff,color:#fff
-```
+- **Detection** — is there a real, repeating transit-like dip above the noise?
+- **Classification** — is it a **transit** (planet), an **eclipsing binary**, a **blend**, or just **noise**? — with a calibrated confidence, and an honest *"uncertain"* when the evidence is weak.
 
-| Stage | What it does | Time |
-|---|---|---|
-| **Load** | Downloads the star's light curve from NASA MAST; falls back to Full-Frame Image extraction if no pre-made curve exists. Uploaded FITS files skip this. | 5–60 s |
-| **Clean** | Normalizes flux, removes slow stellar brightness trends (Savitzky-Golay / biweight), clips outliers. | ~50 ms |
-| **Search** | Coarse Box Least Squares (BLS) scan on a binned curve, then Transit Least Squares (TLS) refines the best period with a realistic limb-darkened transit model. | 0.5–2 s |
-| **Features** | Measures 9 physics parameters: depth, duration, SNR, odd-even transit difference, secondary eclipse ratio, V/U shape metric, transit count. | ~10 ms |
-| **Centroid** | Checks if the star's light-centre shifts during the dip — a shift means the signal is from a neighbouring star (blend), not the target. | ~1 ms |
-| **Fit** | Trapezoid model fit via `scipy.curve_fit` on the phase-folded curve → ±1σ uncertainties on period, depth, and duration from the covariance matrix. | ~20 ms |
-| **CNN** | A 5-seed multimodal 1D-CNN ensemble reads the folded light curve (global + local views) plus 11 stellar/transit scalars. Cross-mission model (Kepler + TESS). | ~50 ms |
-| **Classify** | A 4-class RandomForest turns the measured features into the primary verdict: transit / eclipsing binary / blend / noise. | ~5 ms |
-
-Every analysed target is cached to disk — repeat requests answer in milliseconds.
+Unlike most published models (AstroNet, ExoMiner), which classify signals a *separate* pipeline already found, TARA does **both the search and the classification itself**.
 
 ---
 
-## Datasets
+## 2. How TARA works — the pipeline
 
-TARA was trained and validated on real NASA mission data from multiple catalogs:
+A single search runs through eight stages:
 
-```mermaid
-flowchart TD
-    subgraph Training["Training Data"]
-        K["Kepler DR25 KOI Catalog\n6,923 stars\n(confirmed planets vs\nknown false positives)"]
-        T["TESS ExoFOP TOI +\nExoMiner++ Catalog\n~7,300 labeled signals\n(planet / FP dispositions)"]
-    end
+<p align="center"><img src="docs/assets/pipeline.png" width="720" alt="TARA eight-stage pipeline"></p>
 
-    subgraph Live["Live Inference Data"]
-        M["NASA MAST Archive\nTESS light curves\n& full-frame images"]
-        TIC["TESS Input Catalog\nStellar properties\n(Teff, radius, logg, mag)"]
-    end
+| Stage | File | What it does |
+|------|------|--------------|
+| 1 · Ingest | `pipeline/preprocess.py` | Download the light curve from NASA MAST (or accept an uploaded FITS/CSV) |
+| 2 · Detrend | `pipeline/preprocess.py` | Savitzky–Golay flatten to remove slow stellar/instrument trends |
+| 3 · Search | `pipeline/search.py` | Coarse **Box Least Squares** scan → **Transit Least Squares** refine to find the period |
+| 4 · Features | `pipeline/features.py` | Compute the **12 physics features** |
+| 5 · Fit | `pipeline/fit.py` | Trapezoid transit fit with ± error bars |
+| 6 · Blend | `pipeline/blend.py` | Centroid / dilution checks for background contamination |
+| 7 · Classify | `cnn_infer.py` + `models/` | Run **both** models — the CNN and the RandomForest |
+| 8 · Guards | `main.py` | Enforce a detection floor and emit an honest verdict |
 
-    K --> MX["Cross-Mission\nMixed Dataset\n~14,200 stars"]
-    T --> MX
-
-    M --> P["TARA Pipeline"]
-    TIC --> P
-    MX --> |"trained models"| P
-
-    style K fill:#1a3a5c,stroke:#5ba3d9,color:#fff
-    style T fill:#1a3a5c,stroke:#5ba3d9,color:#fff
-    style M fill:#2a4a3c,stroke:#5bd97a,color:#fff
-    style TIC fill:#2a4a3c,stroke:#5bd97a,color:#fff
-    style MX fill:#3a2a5c,stroke:#9b7ad9,color:#fff
-    style P fill:#5c3a1a,stroke:#d9a35b,color:#fff
-```
-
-| Dataset | Source | Stars/Signals | Used For |
-|---|---|---|---|
-| **Kepler DR25 KOI Catalog** | NASA Exoplanet Archive | 6,923 | CNN training (confirmed planets vs false positives) |
-| **TESS ExoFOP TOI** | MIT / NASA | ~7,300 | CNN training (planet/FP dispositions) |
-| **NASA ExoMiner++ Catalog** | NASA Ames | Merged with TOI | Ground-truth labels for TESS signals |
-| **TESS Input Catalog (TIC)** | MAST | ~1.7B entries | Stellar properties (Teff, radius, logg) for live inference |
-| **NASA MAST Archive** | STScI | On-demand | Live light curve downloads (SPOC, QLP, FFI) |
-
-**Train/test split**: Grouped by star — no star ever appears in both train and test sets. This prevents data leakage from multiple transits of the same planet appearing on both sides (we caught and fixed three leakage traps getting here).
+The whole backend is about **1,000 lines of Python**; the intelligence lives in the two trained models.
 
 ---
 
-## Features Extracted
+## 3. The two models
 
-The pipeline extracts **9 physics features** from each light curve, feeding the RandomForest classifier:
+TARA deliberately uses two models that look at the candidate in different ways, then combines them:
 
-| Feature | Description | Diagnostic Role |
-|---|---|---|
-| `period` | Orbital period in days (TLS-refined) | Core transit parameter |
-| `depth` | Fractional flux dip during transit | Planet size indicator (depth ∝ (Rp/R★)²) |
-| `duration` | Transit duration in days | Constrains orbital geometry |
-| `duration_frac` | Duration as fraction of orbital period | Ingress/egress geometry |
-| `snr` | Signal-to-noise ratio of the transit | Detection confidence (≥7.0 threshold) |
-| `odd_even_diff` | Depth difference between odd and even transits | **Vetting**: alternating depths → binary at half period |
-| `secondary_ratio` | Depth of secondary eclipse / primary depth | **Vetting**: glowing companion → eclipsing binary |
-| `v_shape` | Wing-to-core depth ratio (V vs U shape) | **Vetting**: sharp V → grazing binary; flat U → planet |
-| `n_transits` | Number of observed transit events | Reliability indicator |
-| `centroid` | Light-centre shift during transit (σ) | **Vetting**: shift → signal from a neighbouring star |
+| Model | Type | Reads | Answers |
+|-------|------|-------|---------|
+| **CNN** (5-seed ensemble) | Binary | the raw phase-folded light curve | "how planet-shaped is this?" → **P(planet)** |
+| **RandomForest v3.1** | 4-class (400 trees) | the 12 physics features | "*what kind* of thing is it?" → transit / eclipsing binary / blend / noise |
 
-The CNN additionally receives:
-- **Global view**: 2001-bin median-binned phase fold (full orbit)
-- **Local view**: 201-bin zoomed view around the transit
-- **11 scalar features**: period, duration, depth, planet radius estimate, SNR, impact parameter, stellar Teff/logg/radius, equilibrium temp, insolation
+The CNN is the **data-driven eye** (it learns the shape); the RandomForest is the **physics-driven brain** (it reasons over measurable quantities like depth, duration, and secondary eclipses). The dashboard shows both, and the guards decide the final label.
 
 ---
 
-## Model Architecture
+## 4. How the scoring works
 
-Two models work together to produce the final classification:
+**RandomForest (the 4-class verdict).** The 12 features go into 400 decision trees; the forest returns a probability for each of the four classes, and the highest one becomes the label (its value is the confidence). The features are physically meaningful, and the model's own importance ranking — read straight from the trained forest — matches what a human vetter would weigh most: transit **depth**, **duration fraction**, **SNR** and **period** lead.
 
-### 1. RandomForest Classifier (Primary Verdict)
+<p align="center"><img src="docs/assets/feature-importance.png" width="440" alt="RandomForest feature importances"></p>
 
-A **4-class RandomForest** trained on 2,055 ExoMiner++-labeled TESS stars whose features were measured by the same pipeline used in production:
+**CNN (the planet-shape score).** The folded light curve is fed to five independently trained networks; their outputs are averaged in logit space, then passed through a **temperature calibration** (T = 1.55) so the confidence number is trustworthy — this lowers calibration error (ECE) from 0.038 to 0.025 **without changing the ranking (AUC)**.
 
-```
-Classes: transit | eclipsing_binary | blend | noise
-Input:   9 physics features (measured by TARA's own pipeline)
-Split:   Grouped 5-fold cross-validation (by star)
-```
+**How we measure the score (AUC).** AUC is the probability the model ranks a real planet above a random non-planet. It is measured on a **held-out, grouped split** (no star appears in both training and test, so the model can't cheat by memorising a star). The CNN is scored planet-vs-not; the RandomForest planet-vs-rest.
 
-### 2. Multimodal 1D-CNN Ensemble (Second Opinion)
+<p align="center"><img src="docs/assets/scores-auc.png" width="680" alt="CNN AUC by mission and calibration"></p>
 
-A deep-learning ensemble providing a binary planet/not-planet probability:
-
-```mermaid
-flowchart LR
-    subgraph Input
-        G["Global View\n(2001 bins)"]
-        L["Local View\n(201 bins)"]
-        S["11 Scalars\n(stellar + transit)"]
-    end
-
-    subgraph CNN["CNN Architecture (× 5 seeds)"]
-        G --> GC["Conv1D 16→32→64\nBatchNorm + ReLU\nMaxPool + AdaptivePool"]
-        L --> LC["Conv1D 16→32\nBatchNorm + ReLU\nMaxPool + AdaptivePool"]
-        S --> SF["Linear → ReLU\n(24 units)"]
-        GC --> CAT["Concatenate\n(512 + 256 + 24)"]
-        LC --> CAT
-        SF --> CAT
-        CAT --> HD["Dense 96 → ReLU\nDropout 0.35"]
-        HD --> OUT["Sigmoid\nP(planet)"]
-    end
-
-    OUT --> AVG["Average\n5 seeds"]
-    AVG --> V{"P > 0.45?\n(tuned threshold)"}
-    V -->|Yes| PL["🪐 Planet"]
-    V -->|No| NP["❌ Not Planet"]
-
-    style G fill:#1a3a5c,stroke:#5ba3d9,color:#fff
-    style L fill:#1a3a5c,stroke:#5ba3d9,color:#fff
-    style S fill:#1a3a5c,stroke:#5ba3d9,color:#fff
-    style AVG fill:#3a2a5c,stroke:#9b7ad9,color:#fff
-    style PL fill:#1a5c3a,stroke:#5bd97a,color:#fff
-    style NP fill:#5c1a1a,stroke:#d95b5b,color:#fff
-```
-
-The CNN was trained **cross-mission** on ~14,200 stars (Kepler + TESS combined). Five random seeds are averaged for a more stable prediction.
+**Guards turn a score into an honest verdict.** A signal is only "detected" if it clears **SNR ≥ 7**; a verdict is only "confident" if the top class probability ≥ 0.40 **and** it beats the runner-up by ≥ 0.10 — otherwise the UI says *uncertain* instead of guessing.
 
 ---
 
-## Results
+## 5. Datasets
 
-All scores are on **held-out data** with **grouped splits** (no star in both train and test):
+Every training example needs three things, joined by star ID (**TIC** for TESS, **KIC** for Kepler): a **label** (what it is), an **ephemeris** (period + epoch, to fold the curve), and a **light curve** (the flux). Labels come from vetted catalogues; flux comes from NASA MAST via `lightkurve`.
 
-### Model Performance Summary
+<p align="center"><img src="docs/assets/datasets.png" width="720" alt="Dataset provenance"></p>
 
-| Model | Dataset | Metric | Score |
-|---|---|---|---|
-| 🏆 **Cross-mission CNN ensemble** | Kepler + TESS (held-out) | **AUC** | **0.951** |
-| — Kepler subset | Kepler only | AUC | 0.932 |
-| — TESS subset | TESS only | AUC | 0.966 |
-| 4-class RandomForest | TESS live features | Accuracy | 73.6% |
-| 4-class RandomForest | TESS (planet-vs-rest) | AUC | 0.906 |
-| Kepler tabular RF | Kepler catalog features | Accuracy | 86.9% |
-| Cross-catalog stress test | New catalog (domain shift) | AUC | ~0.72 |
-| MCMC parameter fit | WASP-18b period validation | Match | 0.94145 d |
+| Source | Role |
+|--------|------|
+| ExoMiner-derived labelled TCE catalogue (TESS) | labels + ephemerides |
+| Kepler DR25 KOI dispositions | labels |
+| TOI catalogue (ExoFOP, 8,064 objects) | labels |
+| NASA MAST light curves (SPOC / TESS-SPOC, single sector) | the flux, pulled with `lightkurve` |
 
-> **WASP-18b validation**: The batman+emcee MCMC parameter fit recovered a period of **0.94145 d**, matching the published literature value of **0.941452 d** — confirming the pipeline's measurement accuracy.
+These feed two training sets: **~14,000 folded views** for the CNN and **5,950 twelve-feature rows** for the RandomForest.
 
-### AUC Comparison Across Datasets
-
-```mermaid
-%%{init: {'theme': 'dark'}}%%
-xychart-beta
-    title "AUC Scores Across Datasets & Models"
-    x-axis ["CNN Mixed\n(Kepler+TESS)", "CNN\nKepler Only", "CNN\nTESS Only", "RF 4-Class\n(Planet vs Rest)", "RF Kepler\nTabular", "Cross-Catalog\nStress Test"]
-    y-axis "AUC Score" 0.5 --> 1.0
-    bar [0.951, 0.932, 0.966, 0.906, 0.869, 0.72]
-```
-
-### Key Takeaways
-
-- **One model, both missions**: The cross-mission CNN generalizes across Kepler and TESS without per-mission fine-tuning.
-- **Honest domain shift**: On a completely new catalog (not seen during training), performance drops to ~0.72 AUC — we measure and report this transparently. Most teams don't.
-- **Three leakage traps caught**: During development, we identified and fixed three separate data leakage issues (star overlap, phase-fold information, and temporal leakage) before reporting final numbers.
+- **Not usable for training:** the TIC / Candidate Target List star catalogues — they contain neither dispositions nor light curves.
+- **One key data decision (variant B):** Kepler's 30-minute cadence smears transit edges. Including those transits taught the model a soft transit shape that transferred poorly to TESS's sharp 2-minute cadence, so they were **excluded** from the transit class — this alone raised planet-vs-rest AUC from 0.906 to **0.953**.
 
 ---
 
-## Dashboard
+## 6. Results (honest)
 
-The web-based review workspace provides:
+| What | Metric | Score |
+|------|--------|-------|
+| CNN ensemble (planet vs not) | ROC AUC | **0.951** — Kepler 0.932 / TESS 0.966 |
+| CNN — honest floor | 5-fold cross-validation | **0.902 ± 0.017** |
+| CNN — calibration | ECE | 0.038 → **0.025** (AUC unchanged) |
+| RandomForest v3.1 (4-class) | grouped accuracy | **75.8%** |
+| RandomForest — planet vs rest | ROC AUC | **0.953** |
+| RandomForest — transit class | precision / recall | 0.76 / 0.69 |
+| RandomForest — blend (hardest) | recall | 0.67 |
 
-- **Review queue** with sparkline previews and classification badges
-- **Phase-folded transit chart** with binned medians and trapezoid model overlay
-- **Detrended light curve** and **BLS periodogram** visualization
-- **Class probability bars** from the RandomForest + CNN second opinion
-- **4-check vetting summary** (transit shape, secondary eclipse, odd-even depth, centroid)
-- **Measurement table** with ±1σ error bars
-- **Pipeline trace** showing per-stage wall-clock timings
-- **FITS file upload** — analyze uploaded light curves without a TIC ID
-- **Dark/light theme** toggle
-- **Export** results as JSON
+**Blind end-to-end test** on 331 real TESS Objects of Interest:
 
-The dashboard is dependency-free HTML + Canvas (no React, no charting library) — under 40 KB total.
+<p align="center"><img src="docs/assets/blind-recovery.png" width="440" alt="Blind recovery on 331 real TESS TOIs"></p>
 
----
-
-## Getting Started
-
-### Prerequisites
-
-- **Python 3.10 or 3.11**
-- Internet connection (first-time setup + live star analysis)
-
-### Setup
-
-**Linux / macOS:**
-```bash
-cd tara
-./setup.sh
-```
-
-**Windows:**
-```cmd
-cd tara
-setup.bat
-```
-
-This creates a `.venv` and installs all dependencies from `requirements.txt` (~10 minutes).
-
-> **Note**: If `batman-package` fails (needs a C compiler), remove it from `requirements.txt` — it's only used by the Colab training notebooks, never by the app.
-
-### Run
-
-Open **two terminals**:
-
-**Terminal 1 — API backend:**
-```bash
-# Linux/macOS
-cd tara && .venv/bin/uvicorn app.main:app --app-dir backend --port 8000
-
-# Windows
-cd tara
-.venv\Scripts\uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000
-```
-
-**Terminal 2 — Dashboard:**
-```bash
-# Any OS (with Node.js)
-npx http-server "html live" -p 5196
-
-# Without Node.js (Python only)
-cd "html live" && python -m http.server 5196
-```
-
-Open **http://localhost:5196/dash-workspace.html** — demo stars load instantly from cache.
-
-### Quick Test
-
-The 8 demo stars in `backend/data/cache/` answer instantly. To analyze a new star, type any TIC ID (e.g., `TIC 219253008`) in the search box — the full pipeline runs live in 15–90 seconds.
+Half of known planets are recovered end to end, 74% of false positives are rejected, and EB recall (22%) reflects domain shift from mostly-Kepler EB training. **The honest headline:** of the planets *not* recovered, most are lost at the **detection** front-end (the single-sector SNR ≥ 7 floor), **not** by the classifier — given a detected signal, TARA labels it correctly the large majority of the time. So the ~0.95 classification AUC and the 50% end-to-end number are measuring two different, both-honest things.
 
 ---
 
-## Project Structure
+## 7. Codebase
 
 ```
-tara/
-├── README.md                      ← you are here
-├── LICENSE                        ← MIT
-├── requirements.txt               ← Python dependencies
-├── setup.sh / setup.bat           ← one-command environment setup
-│
-├── html live/                     ★ the dashboard (vanilla HTML/JS/Canvas)
-│   ├── dash-workspace.html        ← main review workspace
-│   ├── about.html                 ← about page
-│   ├── dash-workspace.css         ← compiled styles
-│   └── about.css
-│
-├── backend/                       ★ FastAPI science pipeline
+tara/                              (this folder = the repository root)
+├── backend/
 │   ├── app/
-│   │   ├── main.py                ← API endpoints (/analyze, /health, /popular)
-│   │   ├── cnn_infer.py           ← multimodal CNN ensemble inference
+│   │   ├── main.py                FastAPI app + orchestration + honesty guards (4 endpoints)
+│   │   ├── cnn_infer.py           CNN ensemble inference (5 seeds + temperature calibration)
 │   │   ├── pipeline/
-│   │   │   ├── preprocess.py      ← Stage 1: load & clean light curves
-│   │   │   ├── search.py          ← Stage 2: BLS → TLS period search
-│   │   │   ├── features.py        ← Stage 3: extract 9 physics features
-│   │   │   ├── blend.py           ← Stage 4: centroid shift (blend check)
-│   │   │   ├── fit.py             ← Stage 5: trapezoid fit with ±1σ errors
-│   │   │   └── cnn_views.py       ← Stage 6: build CNN input views
-│   │   └── models/
-│   │       ├── mixed/             ← cross-mission CNN ensemble (AUC 0.951)
-│   │       │   ├── cnn_mixed_seed[1-5].pt
-│   │       │   └── scalar_norm_mixed.npz
-│   │       └── tabular/
-│   │           └── model.joblib   ← 4-class RandomForest
-│   └── data/
-│       └── popular_stars.json     ← demo star metadata
-│
-└── docs/                          ← (screenshots can be added here later)
+│   │   │   ├── preprocess.py      MAST download, detrend, zero-centred-flux guard
+│   │   │   ├── search.py          BLS coarse scan → TLS refine (period search)
+│   │   │   ├── features.py        the 12 physics features
+│   │   │   ├── fit.py             trapezoid transit fit + uncertainties
+│   │   │   ├── blend.py           centroid / dilution (blend) check
+│   │   │   └── cnn_views.py       build phase-folded views for the CNN
+│   │   ├── models/
+│   │   │   ├── tabular/model.joblib          RandomForest v3.1 (400 trees, 12 features, 4 classes)
+│   │   │   └── mixed/cnn_mixed_seed{1..5}.pt + scalar_norm_mixed.npz + calibration.json
+│   │   └── data/                  10 demo star caches + popular_stars.json
+│   └── train/                     dataset-build + training scripts
+├── frontend/                      the dashboard — dash-workspace.html + about.html
+│                                  (vanilla HTML/CSS/JS + compiled Tailwind, no build server)
+├── notebooks/                     Colab / Kaggle training notebooks
+├── docs/                          architecture.md · research paper (PDF) · RUN-ON-WINDOWS · assets/
+├── start/                         setup.sh · setup.bat  (environment setup)
+└── requirements.txt · quickstart.py · dev_check.py
 ```
 
----
+**API endpoints** (FastAPI, `backend/app/main.py`):
 
-## Tech Stack
-
-| Category | Tools |
-|---|---|
-| **Astronomy data** | [lightkurve](https://docs.lightkurve.org/), [astropy](https://www.astropy.org/), [astroquery](https://astroquery.readthedocs.io/) |
-| **Detrending & search** | [wotan](https://github.com/hippke/wotan) (biweight), [Transit Least Squares](https://github.com/hippke/tls) |
-| **Machine learning** | [PyTorch](https://pytorch.org/) (CNN), [scikit-learn](https://scikit-learn.org/) (RandomForest), [XGBoost](https://xgboost.readthedocs.io/) |
-| **Explainability** | [SHAP](https://shap.readthedocs.io/), [Captum](https://captum.ai/) |
-| **Parameter fitting** | [batman](https://github.com/lkreidberg/batman) + [emcee](https://emcee.readthedocs.io/) (MCMC), [scipy](https://scipy.org/) (curve_fit) |
-| **Backend** | [FastAPI](https://fastapi.tiangolo.com/) + [Uvicorn](https://www.uvicorn.org/) |
-| **Frontend** | Vanilla HTML/JS/Canvas — zero runtime dependencies |
-| **Pixel analysis** | [photutils](https://photutils.readthedocs.io/) |
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET`  | `/health` | liveness + which models loaded |
+| `GET`  | `/popular` | precomputed demo stars (instant) |
+| `POST` | `/analyze` | analyze a star by TIC id |
+| `POST` | `/analyze-file` | analyze an uploaded FITS/CSV light curve |
 
 ---
 
-## Honest Limitations
+## 8. Setup & run
 
-**We believe in reporting what doesn't work, not just what does:**
+```bash
+# 1. one-time setup (needs internet)
+./start/setup.sh      # macOS/Linux   ·   Windows: start\setup.bat
+# (equivalent to: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt)
+```
 
-- ⚠️ **Photometrically indistinguishable false positives exist.** Some false positives pass every check and both models say "planet." Only follow-up observations (pixel difference-imaging, ground photometry, radial velocity) can resolve those. No light-curve-only system can — including NASA's.
+```bash
+# 2. quick sanity check — downloads one known planet host, runs a transit search
+.venv/bin/python quickstart.py
+```
 
-- ⚠️ **Domain shift is real.** On a completely new catalog the score drops toward ~0.72 AUC. This is expected and honestly measured — most systems don't report this number.
+```bash
+# 3. start the backend API
+.venv/bin/uvicorn app.main:app --app-dir backend --port 8000
+```
 
-- ⚠️ **FFI fallback is noisier.** Stars without a ready-made SPOC/QLP light curve fall back to Full-Frame Image extraction — lower SNR data means the diagnostics deserve less trust.
+```bash
+# 4. serve the dashboard (separate terminal), then open dash-workspace.html
+npx http-server frontend -p 5196
+# → http://localhost:5196/dash-workspace.html
+```
 
-- ⚠️ **No detection = noise.** If the period search finds no transit signal (SNR < 7.0), TARA reports "noise — no signal" rather than letting the classifier guess on empty features. This is a deliberate safety guard.
-
-- ⚠️ **This is a candidate finder, not a confirmation tool.** TARA performs the same role as automated pipelines at NASA — flagging candidates for human review. Confirming a planet requires spectroscopic follow-up.
+The dashboard auto-detects the backend (localhost / same-origin) and pings its health every 20s, so you can see whether the engine is live.
 
 ---
 
-## License
+## 9. Honesty guards
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+TARA is built to **abstain rather than fabricate** a verdict on bad input. Three guards enforce this:
+
+- **Detection floor** — a signal must clear **SNR ≥ 7** to count as detected; below that the star is reported as *no detected signal*, not a coin-flip.
+- **Zero-centred-flux guard** — corrupt or already-normalised products (median ≤ 0) are rejected with a clear message instead of producing garbage features.
+- **Confident flag** — a label is only shown as confident when the top probability ≥ 0.40 **and** the margin over the runner-up ≥ 0.10; otherwise the UI shows *uncertain*, and the CNN reading is suppressed when there is no real signal to read.
 
 ---
 
-<p align="center">
-  <b>TARA</b> · तारा · Transit Analysis & Recognition AI<br>
-  <i>Built with real NASA data. Honest about its limits.</i>
-</p>
+## 10. Limitations & future work
+
+- **Detection is the bottleneck**, not the classifier — single-sector search caps end-to-end recovery. The highest-value next step is a "**classify pre-detected TCEs**" mode that skips the search (expected recovery 50% → 75–85%).
+- **EB recall** on real TESS is depressed by training mostly on Kepler EBs (domain shift) — fix by adding the **TESS Eclipsing Binary catalogue** and **Kepler Certified-False-Positive** flags.
+- **Blend** is the data-starved class (recall 0.67) — the same new label sources help.
+- **Batch mode** — TLS search is CPU-heavy; multi-sector stitching + offline batch would scale it.
+- A **difference-imaging / pixel branch** is the real modality gap to ExoMiner.
+
+---
+
+*TARA — Transit Analysis & Recognition AI. Detects and classifies exoplanet transits in noisy TESS light curves.*

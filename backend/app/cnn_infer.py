@@ -14,6 +14,7 @@ can label the verdict truthfully.
 """
 import os
 import glob
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -102,6 +103,16 @@ class Ensemble:
             nz = np.load(os.path.join(model_dir, norm_file))
             self.mu, self.sd, self.med = nz["mu"], nz["sd"], nz["med"]
         self.n_models = len(self.nets)
+        # optional temperature calibration (calibration.json next to the scaler,
+        # produced by tara_colab_calibrate.ipynb) — fixes overconfidence, AUC unchanged
+        self.temperature = None
+        if norm_file:
+            cal = os.path.join(model_dir, os.path.dirname(norm_file), "calibration.json")
+            if os.path.exists(cal):
+                try:
+                    self.temperature = float(json.load(open(cal))["temperature"])
+                except Exception:
+                    self.temperature = None
 
     def predict(self, g, l, scalars):
         s = np.where(np.isnan(scalars), self.med, scalars)
@@ -115,10 +126,17 @@ class Ensemble:
         lt = torch.tensor(l, dtype=torch.float32).view(1, 1, -1)
         st = torch.tensor(sn, dtype=torch.float32).view(1, -1)
         with torch.no_grad():
-            ps = [float(torch.sigmoid(net(gt, lt, st))[0]) for net in self.nets]
-        prob = float(np.mean(ps))
+            zs = [float(net(gt, lt, st)[0]) for net in self.nets]      # raw logits
+        ps = [1.0 / (1.0 + np.exp(-z)) for z in zs]                    # per-seed probs
+        if self.temperature:
+            # calibrated path: mean logit / T (rankings unchanged, probabilities honest)
+            prob = float(1.0 / (1.0 + np.exp(-np.mean(zs) / self.temperature)))
+        else:
+            prob = float(np.mean(ps))                                  # legacy: mean of probs
         return {
             "planet_probability": round(prob, 3),
+            "seed_spread": round(float(np.std(ps)), 3),   # disagreement across the 5 seeds
+            "calibrated": bool(self.temperature),
             "label": "planet" if prob > THRESHOLD else "not_planet",
             "threshold": THRESHOLD,
             "n_models": self.n_models,
