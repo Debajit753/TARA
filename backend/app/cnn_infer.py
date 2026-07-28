@@ -131,11 +131,17 @@ class Ensemble:
         if self.temperature:
             # calibrated path: mean logit / T (rankings unchanged, probabilities honest)
             prob = float(1.0 / (1.0 + np.exp(-np.mean(zs) / self.temperature)))
+            # Spread must live on the SAME scale as the probability it annotates.
+            # Measuring it on raw (uncalibrated) probs made the displayed "±" far
+            # too tight on exactly the confident calls, where temperature scaling
+            # moves probabilities most.
+            spread_src = [1.0 / (1.0 + np.exp(-z / self.temperature)) for z in zs]
         else:
             prob = float(np.mean(ps))                                  # legacy: mean of probs
+            spread_src = ps
         return {
             "planet_probability": round(prob, 3),
-            "seed_spread": round(float(np.std(ps)), 3),   # disagreement across the 5 seeds
+            "seed_spread": round(float(np.std(spread_src)), 3),   # disagreement across the 5 seeds
             "calibrated": bool(self.temperature),
             "label": "planet" if prob > THRESHOLD else "not_planet",
             "threshold": THRESHOLD,

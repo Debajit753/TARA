@@ -109,7 +109,7 @@ Two models are not enough if the input is junk. Three guards make TARA **abstain
    └──────────────────────────────────────────────────────────┘
 
    No cloud, no paid APIs — inference runs on CPU. Training happens
-   separately in the Colab / Kaggle notebooks under notebooks/.
+   separately in the Colab / Kaggle notebooks under notebooks/ (shipped in this repo).
 ```
 
 ---
@@ -117,22 +117,24 @@ Two models are not enough if the input is junk. Three guards make TARA **abstain
 ## 7. Module map
 
 ```
-backend/app/
-├── main.py            FastAPI app + orchestration + honesty guards
-├── cnn_infer.py       CNN ensemble inference (5 seeds + temperature calibration)
-├── pipeline/
-│   ├── preprocess.py  MAST download, detrend, zero-centred-flux guard
-│   ├── search.py      BLS coarse scan → TLS refine (period search)
-│   ├── features.py    the 12 physics features
-│   ├── fit.py         trapezoid transit fit + uncertainties
-│   ├── blend.py       centroid / dilution (blend) check
-│   └── cnn_views.py   build phase-folded views for the CNN
-├── models/
-│   ├── tabular/model.joblib          RandomForest v3.1 (400 trees, 12 feats, 4 classes)
-│   └── mixed/cnn_mixed_seed{1..5}.pt + scalar_norm_mixed.npz + calibration.json
-└── data/
-    ├── popular_stars.json            the 10 demo stars
-    └── cache/                        their precomputed results (instant load)
+backend/
+├── app/
+│   ├── main.py            FastAPI app + orchestration + honesty guards
+│   ├── cnn_infer.py       CNN ensemble inference (5 seeds + temperature calibration)
+│   ├── pipeline/
+│   │   ├── preprocess.py  MAST download, detrend, zero-centred-flux guard
+│   │   ├── search.py      BLS coarse scan → TLS refine (+ capped deep search)
+│   │   ├── features.py    the 12 physics features (+ testability flags)
+│   │   ├── fit.py         trapezoid transit fit + uncertainties
+│   │   ├── blend.py       centroid / dilution (blend) check
+│   │   └── cnn_views.py   build phase-folded views for the CNN
+│   └── models/
+│       ├── tabular/model.joblib          RandomForest v3.1 (400 trees, 12 feats, 4 classes)
+│       └── mixed/cnn_mixed_seed{1..5}.pt + scalar_norm_mixed.npz + calibration.json
+├── data/
+│   ├── popular_stars.json            the 10 demo stars
+│   └── cache/                        their precomputed results (instant load)
+└── train/                            dataset-build + training scripts
 ```
 
 ---

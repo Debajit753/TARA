@@ -80,19 +80,46 @@ def load_raw(tic_id: str, retries: int = 3):
     raise ValueError(f"Could not read TESS data for {tic_id} — the download was unreadable, try again in a moment.")
 
 
-def clean_lc(lc, window_length: int = 401, sigma: float = 5.0):
+def clean_lc(lc, window_length: int = None, sigma: float = 5.0,
+             window_days: float = 0.55):
     # zero-centered flux guard: some products deliver flux with median ~0 —
-    # normalize() would divide by ~0 and every measurement becomes garbage
+    # normalize() would divide by ~0 and every measurement becomes garbage.
+    # Scale is measured with the MAD (robust): plain nanstd is inflated by
+    # scattered-light spikes, which made this guard fire on good FFI products.
     f0 = np.asarray(lc.flux.value, float)
     m0 = np.nanmedian(f0)
-    if (not np.isfinite(m0)) or m0 <= 0 or m0 < np.nanstd(f0):
+    mad = 1.4826 * np.nanmedian(np.abs(f0 - m0)) if np.isfinite(m0) else np.nan
+    if (not np.isfinite(m0)) or m0 <= 0:
         raise ValueError("This star's light-curve product has zero-centered flux "
-                         "(unusable for relative photometry) — try again; a different "
-                         "product may be picked, or the star may need FFI extraction.")
-    return (lc.remove_nans()
-              .normalize()
-              .flatten(window_length=window_length)
-              .remove_outliers(sigma=sigma))
+                         "(median <= 0), which is unusable for relative photometry. "
+                         "This product cannot be analysed; the star may need FFI extraction.")
+    if np.isfinite(mad) and m0 < 3.0 * mad:
+        raise ValueError("This star's light curve is dominated by scatter rather than "
+                         "signal (median flux is below 3x the noise scale) — no reliable "
+                         "relative photometry is possible from this product.")
+
+    lc = lc.remove_nans().normalize()
+
+    # The savgol window is a CADENCE COUNT, so a fixed 401 means ~13 h on 2-min
+    # data but ~8.4 DAYS on 30-min FFI data — i.e. effectively no detrending at
+    # all there. Derive it from real time instead. window_days=0.55 reproduces
+    # the historical 401 on 2-min data, so the well-tested SPOC path is unchanged.
+    if window_length is None:
+        t = np.asarray(lc.time.value, float)
+        dt = np.nanmedian(np.diff(t)) if t.size > 2 else np.nan
+        if np.isfinite(dt) and dt > 0:
+            window_length = max(11, int(round(window_days / dt)) | 1)   # odd, >= 11
+        else:
+            window_length = 401
+    n = int(np.isfinite(np.asarray(lc.flux.value, float)).sum())
+    if window_length >= n:                       # savgol needs window < len(data)
+        window_length = max(5, (n // 2) | 1)
+
+    # NOTE sigma_lower=inf: remove_outliers is SYMMETRIC by default, and a transit
+    # IS a run of low outliers — a deep, low-duty-cycle transit was being deleted
+    # entirely by its own cleaning step. Clip flares/cosmic rays (high side) only.
+    return (lc.flatten(window_length=window_length)
+              .remove_outliers(sigma=sigma, sigma_lower=np.inf))
 
 
 def load_and_clean(tic_id: str, window_length: int = 401, sigma: float = 5.0):

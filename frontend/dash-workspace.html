@@ -59,7 +59,7 @@
         <div class="actions">
           <button class="btn" id="btnExport">Export JSON</button>
           <button class="btn" id="btnRefresh">Re-analyze</button>
-          <button class="btn" id="btnDeep" title="Thorough full-period search for hard/shallow candidates — up to 3 min">⚡ Deep search</button>
+          <button class="btn" id="btnDeep" title="Thorough full-period search for hard/shallow candidates — up to 3 min">Deep search</button>
           <button class="btn primary" id="btnReview">Mark reviewed</button>
         </div>
       </div>
@@ -101,7 +101,7 @@
             <div class="card">
               <h3>Class probabilities</h3>
               <div class="probrows" id="probRows"></div>
-              <div class="probnote" style="border-top:none;margin-top:8px;padding-top:0;font-size:11px;color:var(--faint)">"Other" = 1 − top score: the model's own uncertainty, not a trained class — high means this may be a system type it wasn't trained on.</div>
+              <div class="probnote" style="border-top:none;margin-top:8px;padding-top:0;font-size:11px;color:var(--faint)">The four classes above always add up to 100%. "Spread across other classes" is 1 − the top score: how much probability sits outside the leading class. A high value means the model is torn between classes, not that it found something outside them.</div>
               <div id="probNote"></div>
               <div id="cnnBox"></div>
             </div>
@@ -190,6 +190,10 @@ const CMETA=[['transit','Transit','var(--teal)'],['eclipsing_binary','Eclipsing 
              ['noise','Noise','var(--faint)']];
 let QUEUE=[];      // {tic,name,desc,cls,cached,data?,raw?,reviewed?,custom?}
 let ACTIVE=0,FILTER='all',BUSY=false,ONLINE=false;
+// Monotonic token for in-flight analyses. An analysis takes 10-90 s, and the user
+// can select another star while it runs — without this, the slow response would
+// repaint every panel with star A's numbers under star B's name.
+let RUN=0;
 
 const $=id=>document.getElementById(id);
 const cssv=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -386,8 +390,13 @@ function clearResults(){
   $('vetGrid').innerHTML='';$('paramTable').innerHTML='';$('starTable').innerHTML='';$('modelTable').innerHTML='';$('rawJson').innerHTML='';
   $('trace').innerHTML='';$('stageTable').innerHTML='';
   $('lcInfo').textContent='';$('lcInfoO').textContent='';$('pgInfo').textContent='';
+  // Clear the BACKING STORE unconditionally. Guarding on offsetParent skipped any
+  // canvas on a hidden tab, so after a failed search the previous star's light
+  // curve and periodogram were still sitting there when you opened Signals.
   ['cFold','cLCo','cLC','cPG'].forEach(id=>{const c=$(id);
-    if(c&&c.offsetParent!==null){const[x,W,H]=setup(c);x.clearRect(0,0,W,H);}});
+    if(!c)return;
+    const cx=c.getContext('2d'); if(cx)cx.clearRect(0,0,c.width,c.height);
+    if(c.offsetParent!==null){const[x,W,H]=setup(c);x.clearRect(0,0,W,H);}});
 }
 
 /* ---------- per-row ⋯ menu: star · reorder within folder · remove ---------- */
@@ -448,6 +457,7 @@ async function processBulk(tics){
 
 /* ---------- show a target ---------- */
 async function show(i,refresh=false,deep=false){
+  const myRun=++RUN;              // supersedes any analysis still in flight
   ACTIVE=i;const t=QUEUE[i];
   $('empty').style.display='none';$('offline').style.display='none';$('mainwrap').style.display='block';
   $('tName').textContent=t.name;$('tTic').textContent=t.tic;
@@ -462,9 +472,13 @@ async function show(i,refresh=false,deep=false){
     try{
       t.data=await analyze(t.tic,refresh||deep,deep);
       t.cls=t.data.classification.label;t.status=null;
+      // The user may have moved on while this ran — keep the stored result, but
+      // do NOT paint it over whatever star is on screen now.
+      if(myRun!==RUN){buildQueue();return;}
       notice(null);
     }catch(e){
       t.status='error';
+      if(myRun!==RUN){buildQueue();return;}
       notice('err',esc(friendlyErr(e.message))+' — nothing to show for this star.');
       BUSY=false;$('btnRefresh').disabled=false;$('btnDeep').disabled=false;buildQueue();
       return;                             // results stay blank: no data means no output
@@ -558,13 +572,17 @@ function render(d){
   const op=nodet?0.35:1;
   const topP=Math.max(0,...Object.values(pr).map(v=>v||0));
   const other=Math.max(0,1-topP);
+  // The four class bars already sum to 100%. The old "Other" bar drew 1−top on the
+  // SAME track, so a near three-way tie rendered a 67% "Other" — the longest bar in
+  // the card — implying out-of-distribution mass the model never assigned. Show it
+  // as a separate margin readout instead of a fifth class.
   const rowsH=CMETA.filter(([k])=>pr[k]!=null).map(([k,label,col])=>
     `<div class="pr"><span class="n">${label}</span><span class="track"><span class="fill" style="background:${col};width:${(pr[k]*100)}%;opacity:${op}"></span></span><span class="v">${(pr[k]*100).toFixed(1)}%</span></div>`)
-    .concat([`<div class="pr"><span class="n">Other</span><span class="track"><span class="fill" style="background:var(--line2);width:${(other*100)}%;opacity:${op}"></span></span><span class="v">${(other*100).toFixed(1)}%</span></div>`]);
+    .concat([`<div class="pr" style="opacity:.75;border-top:1px solid var(--line);margin-top:6px;padding-top:6px"><span class="n">Spread across other classes</span><span class="track" style="visibility:hidden"></span><span class="v">${(other*100).toFixed(1)}%</span></div>`]);
   $('probRows').innerHTML=rowsH.join('');
   $('probNote').innerHTML=nodet
     ?'<div class="probnote">No transit was detected, so these scores come from an empty feature vector and aren’t meaningful — the verdict is <b>noise</b>.</div>'
-    :(topP<0.5?'<div class="probnote">Low confidence — this could be a system type the model wasn’t trained on (multi-star system, variable star, instrument artifact). Treat as unresolved.</div>':'');
+    :(topP<0.5?'<div class="probnote">Low confidence — the model is split between classes rather than favouring one. It may also be a system type it wasn’t trained on (multi-star system, variable star, instrument artifact). Treat as unresolved.</div>':'');
   /* star props strip + estimated planet size */
   const rp=(!nodet&&P.depth>0&&T.radius!=null)?Math.sqrt(P.depth)*T.radius*109.2:null;
   $('propsStrip').innerHTML=[
@@ -596,18 +614,26 @@ function render(d){
     sum.textContent=c.note||'No transit signal found — flat / noise-dominated light curve.';
     $('vetGrid').innerHTML='<div class="vet-empty" style="grid-column:1/3">'+esc(c.note||'No transit signal found.')+'<br><br>The odd–even, secondary-eclipse, U-vs-V and centroid checks only mean something once a transit is found, so they are not shown for this target.</div>';
   }else{
-    const nbad=diags.filter(x=>x.status!=='ok').length;
+    // three states: ok / bad / unknown. "unknown" = the check could not be run;
+    // it must never be counted as a pass OR as a false-positive flag.
+    const SYM={ok:'✓',bad:'✕',unknown:'–'};
+    const st=x=>(x.status==='ok'||x.status==='bad')?x.status:'unk';
+    const nbad=diags.filter(x=>x.status==='bad').length;
+    const nunk=diags.filter(x=>x.status==='unknown').length;
+    const nok=diags.filter(x=>x.status==='ok').length;
+    const unkTail=nunk?` · <b>${nunk}</b> could not be tested`:'';
     $('checkLines').innerHTML=diags.map(x=>
-      `<div class="chk"><div class="chkrow"><span class="st ${x.status==='ok'?'ok':'bad'}">${x.status==='ok'?'✓':'✕'}</span>${esc(x.label)}<span class="val">${esc(x.value)}</span></div>
-       <div class="chksub"><b>${esc(x.result)}</b> ${THR[x.label]?'· '+THR[x.label]:''}</div></div>`).join('');
+      `<div class="chk"><div class="chkrow"><span class="st ${st(x)}">${SYM[x.status]||'–'}</span>${esc(x.label)}<span class="val">${esc(x.value)}</span></div>
+       <div class="chksub"><b>${esc(x.result)}</b> ${(x.status!=='unknown'&&THR[x.label])?'· '+THR[x.label]:''}</div></div>`).join('');
     const sum=$('checkSummary');
-    if(nbad>0){sum.className='summary-strip '+(nbad>=2?'bad':'warn');sum.innerHTML='<b>'+nbad+' of '+diags.length+'</b> checks flagged a false-positive signature';}
-    else if(cls==='transit'){sum.className='summary-strip good';sum.innerHTML='<b>'+diags.length+' of '+diags.length+'</b> checks consistent with a planet';}
-    else{sum.className='summary-strip warn';sum.innerHTML='No false-positive signature in these checks — but the model classified this <b>'+esc(CLSTXT[cls]||cls)+'</b>. These checks only catch impostors with a clear light-curve fingerprint; confirming a planet needs follow-up.';}
+    if(nbad>0){sum.className='summary-strip '+(nbad>=2?'bad':'warn');sum.innerHTML='<b>'+nbad+' of '+diags.length+'</b> checks flagged a false-positive signature'+unkTail;}
+    else if(nunk&&nok===0){sum.className='summary-strip warn';sum.innerHTML='None of these checks could be run on this target — there is no vetting evidence either way.';}
+    else if(cls==='transit'){sum.className='summary-strip good';sum.innerHTML='<b>'+nok+' of '+diags.length+'</b> checks consistent with a planet'+unkTail;}
+    else{sum.className='summary-strip warn';sum.innerHTML='No false-positive signature in the '+nok+' check'+(nok===1?'':'s')+' that could be run'+(nunk?' ('+nunk+' could not be tested)':'')+' — but the model classified this <b>'+esc(CLSTXT[cls]||cls)+'</b>. These checks only catch impostors with a clear light-curve fingerprint; confirming a planet needs follow-up.';}
     $('vetGrid').innerHTML=diags.map(x=>
-      `<div class="vetcard ${x.status==='ok'?'ok':'bad'}"><div class="h">${esc(x.label)}<span class="val">${esc(x.value)}</span></div>
+      `<div class="vetcard ${st(x)}"><div class="h">${esc(x.label)}<span class="val">${esc(x.value)}</span></div>
        <p class="tests">${esc(x.tests)}</p><div class="result">${esc(x.result)}</div>
-       ${marginLine(x)}<div class="thr">${THR[x.label]||''}</div></div>`).join('')
+       ${x.status==='unknown'?'':marginLine(x)}<div class="thr">${x.status==='unknown'?'':(THR[x.label]||'')}</div></div>`).join('')
       /* context card: the numbers that say how much to TRUST the four checks */
       +`<div class="vetcard neutral"><div class="h">Data quality (context)<span class="val">${fmt(P.snr,1)}σ</span></div>
        <div class="dqrow"><span>Signal-to-noise (detection floor 7.0)</span><b>${fmt(P.snr,1)}</b></div>
@@ -830,8 +856,12 @@ function runSearch(){
   if(!v){notice('warn','Type a TIC number first — e.g. 100100827.');return}
   if(BUSY){notice('warn','Hold on — still analyzing the previous star. Search again when it finishes.');return}
   const norm=v.toUpperCase().startsWith('TIC')?v.toUpperCase().replace(/^TIC\s*/,'TIC '):('TIC '+v);
-  let i=QUEUE.findIndex(q=>q.tic.replace(/\s+/g,'')===norm.replace(/\s+/g,''));
-  if(i<0){QUEUE.unshift({tic:v,name:'Custom target',desc:'analyzed on demand',cls:null,cached:false,custom:true,group:'search'});i=0;
+  // Compare on digits only, and STORE the normalized id. Storing the raw typed
+  // string meant '100100827' and 'TIC 100100827' never matched each other, so the
+  // same star got a second queue row (and a second full pipeline run).
+  const digits=s=>String(s).replace(/\D/g,'');
+  let i=QUEUE.findIndex(q=>digits(q.tic)===digits(norm));
+  if(i<0){QUEUE.unshift({tic:norm,name:'Custom target',desc:'analyzed on demand',cls:null,cached:false,custom:true,group:'search'});i=0;
     if(ACTIVE>=0)ACTIVE++;}
   $('jump').value='';$('jumpKbd').textContent='/';
   show(i);
@@ -849,8 +879,18 @@ $('importFile').onchange=async e=>{
   const nm=f.name.toLowerCase();
   if(nm.endsWith('.csv')||nm.endsWith('.txt')){
     const txt=await f.text();
-    const ids=[...new Set(txt.match(/\d{5,12}/g)||[])].slice(0,100);
-    if(!ids.length){$('qnote').textContent='No TIC numbers found in '+f.name+' — expected one TIC ID per line.';return}
+    // Take the FIRST field of each line, not every number in the file — scanning
+    // the whole text pulled epoch/RA/TOI columns out of an ExoFOP export and queued
+    // them as real targets. Skip a header line if present.
+    const CAP=100;
+    const all=[...new Set(txt.split(/\r?\n/).map(line=>{
+      const first=line.split(/[,;\t]/)[0].trim();
+      const m=first.match(/^(?:TIC[\s_-]*)?(\d{5,12})$/i);
+      return m?m[1]:null;
+    }).filter(Boolean))];
+    const ids=all.slice(0,CAP);
+    const skipped=all.length-ids.length;
+    if(!ids.length){$('qnote').textContent='No TIC numbers found in '+f.name+' — expected one TIC ID per line (or as the first column).';return}
     let added=0;const addedTics=[];
     ids.forEach(id=>{
       if(QUEUE.some(q=>String(q.tic).replace(/\D/g,'')===id))return;
@@ -858,13 +898,17 @@ $('importFile').onchange=async e=>{
       QUEUE.push({tic,name:'Imported',desc:'from '+f.name,cls:null,cached:false,custom:true,group:'upload'});
       addedTics.push(tic);added++});
     buildQueue();
-    $('qnote').innerHTML='Imported <b>'+added+'</b> target'+(added===1?'':'s')+' from '+esc(f.name)+' — analyzing them one by one…';
+    $('qnote').innerHTML='Imported <b>'+added+'</b> target'+(added===1?'':'s')+' from '+esc(f.name)+
+      (skipped?' — <b>first '+ids.length+' of '+all.length+'</b>, '+skipped+' skipped (import cap)':'')+
+      ' — analyzing them one by one…';
     if(addedTics.length)processBulk(addedTics);   // live status appears beside each row
   }else if(nm.endsWith('.fits')||nm.endsWith('.fit')||nm.endsWith('.gz')){
     if(BUSY)return;
     BUSY=true;
     $('empty').style.display='none';$('offline').style.display='none';$('mainwrap').style.display='block';
     $('tName').textContent=f.name;$('tTic').textContent='uploaded FITS';
+    clearResults();          // the previous star's panels must not survive under this filename
+    RUN++;                   // supersede any analysis still in flight
     notice('info','Analyzing uploaded file <b>&nbsp;'+esc(f.name)+'&nbsp;</b> — full pipeline, no download needed');
     try{
       const buf=await f.arrayBuffer();

@@ -2,7 +2,9 @@
 # Rebuild the TARA environment on any Mac/Linux laptop. Needs internet once.
 # Usage:  ./setup.sh
 set -e
-cd "$(dirname "$0")"
+# This script lives in start/, but the project (requirements.txt, backend/,
+# frontend/) is one level up — cd to the project root, not to start/.
+cd "$(dirname "$0")/.."
 echo "Creating virtual environment (.venv) ..."
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip

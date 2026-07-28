@@ -12,11 +12,13 @@ import re
 import json
 import math
 import time
+import tempfile
 import threading
 import numpy as np
 import joblib
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from app.pipeline.preprocess import load_raw, clean_lc
 from app.pipeline.search import fast_search, deep_search
@@ -56,9 +58,32 @@ def get_ensemble():
     return _ensemble or None
 
 
+# Bump when the response shape changes in a way old cached blobs can't satisfy.
+CACHE_SCHEMA = 2
+
+
+def _model_stamp() -> str:
+    """Cheap fingerprint of the serving model. A retrained/swapped model.joblib
+    changes mtime+size, which invalidates every cached verdict — otherwise the
+    cache keeps serving the OLD model's numbers forever with no way to tell."""
+    try:
+        st = os.stat(MODEL_PATH)
+        return f"{int(st.st_mtime)}-{st.st_size}"
+    except OSError:
+        return "unknown"
+
+
 def _cache_path(tic_id: str) -> str:
-    key = re.sub(r"[^A-Za-z0-9]+", "_", tic_id.strip().upper()).strip("_")
-    return os.path.join(CACHE_DIR, f"{key}.json")
+    """One star -> one cache file.
+
+    load_raw() canonicalises '100100827', 'TIC 100100827' and 'tic-100100827'
+    to the same MAST target, so the cache key must canonicalise identically —
+    otherwise the same star gets two cache files that can disagree.
+    """
+    s = str(tic_id).strip().upper()
+    m = re.fullmatch(r"(?:TIC[\s_-]*)?(\d+)", s)
+    key = f"TIC_{m.group(1)}" if m else re.sub(r"[^A-Za-z0-9]+", "_", s).strip("_")
+    return os.path.join(CACHE_DIR, f"{key or 'target'}.json")
 
 
 # ---------- helpers ----------
@@ -72,31 +97,58 @@ def _pair(x, y, n=600):
 
 
 def _diagnostics(f):
+    """The four vetting checks.
+
+    Each check reports ok / bad / UNKNOWN. "unknown" matters: several of these
+    tests silently fall back to a planet-looking value when they cannot be run
+    (a single-transit candidate makes odd-vs-even trivially 0.0; a QLP product
+    carries no centroid columns at all). Printing a green tick for a test that
+    never ran is exactly the kind of false reassurance this project refuses to
+    give, so an untestable check is reported as untested.
+    """
+    testable = f.get("testable") or {}
+    npts = f.get("n_points") or {}
     vs = f.get("v_shape", 0) or 0
     sr = f.get("secondary_ratio", 0) or 0
     oe = f.get("odd_even_diff", 0) or 0
-    ct = f.get("centroid", 0) or 0
+    ct = f.get("centroid")
+    ct_ok = isinstance(ct, (int, float, np.floating)) and np.isfinite(ct)
+    ctv = float(ct) if ct_ok else 0.0
+
     checks = [
-        ("Transit shape (U vs V)", vs >= 0.45, f"{vs:.2f}",
+        ("Transit shape (U vs V)", testable.get("v_shape", True), vs >= 0.45, f"{vs:.2f}",
          "Planets carve a flat-bottomed U-dip; grazing binaries make a sharp V.",
          "Flat-bottomed — consistent with a planet.",
-         "V-shaped — more like two stars grazing."),
-        ("Secondary eclipse", sr < 0.35, f"{sr:.2f}",
+         "V-shaped — more like two stars grazing.",
+         f"Not enough in-transit points to compare the dip's core with its wings "
+         f"(core {npts.get('core', 0)}, wings {npts.get('wing', 0)}) — this check could not be run."),
+        ("Secondary eclipse", testable.get("secondary_ratio", True), sr < 0.35, f"{sr:.2f}",
          "A second dip half an orbit later means the companion glows — a star, not a planet.",
          "No secondary dip — consistent with a dark planet.",
-         "A secondary dip is present — points to an eclipsing binary."),
-        ("Odd vs even depth", oe < 0.5, f"{oe:.2f}",
+         "A secondary dip is present — points to an eclipsing binary.",
+         "No data covers the phase where a secondary eclipse would fall — this check could not be run."),
+        ("Odd vs even depth", testable.get("odd_even_diff", True), oe < 0.5, f"{oe:.2f}",
          "If alternating dips differ in depth, it's likely a binary caught at half its true period.",
          "Odd and even dips match — one repeating event.",
-         "Alternating dips differ — likely a binary at half period."),
-        ("Centroid / blend", ct < 1.0, f"{ct:.2f}σ",
+         "Alternating dips differ — likely a binary at half period.",
+         f"Needs at least two alternating transits to compare (odd {npts.get('odd', 0)}, "
+         f"even {npts.get('even', 0)} points) — this check could not be run."),
+        ("Centroid / blend", ct_ok, ctv < 1.0, (f"{ctv:.2f}σ" if ct_ok else "—"),
          "If the star's light-centre shifts during the dip, the signal comes from a different nearby star.",
          "Light-centre stays put — the signal is from this star.",
-         "Light-centre shifts — a nearby source is blending in."),
+         "Light-centre shifts — a nearby source is blending in.",
+         "This light-curve product carries no centroid columns, so the blend test "
+         "could not be run — a nearby blended source cannot be ruled out here."),
     ]
-    return [{"label": a, "status": "ok" if ok else "bad", "value": val,
-             "tests": tst, "result": (g if ok else b)}
-            for a, ok, val, tst, g, b in checks]
+    out = []
+    for label, can_test, ok, val, tst, good, bad, untested in checks:
+        if not can_test:
+            out.append({"label": label, "status": "unknown", "value": "—",
+                        "tests": tst, "result": untested})
+        else:
+            out.append({"label": label, "status": "ok" if ok else "bad", "value": val,
+                        "tests": tst, "result": (good if ok else bad)})
+    return out
 
 
 def _meta(lc):
@@ -222,6 +274,12 @@ def _analyze_raw(raw, tic_id, tm, _t0, deep: bool = False) -> dict:
     }
     if not detected:
         cls["label"] = "noise"
+        # Keep label and confidence on the SAME class. Previously the label was
+        # rewritten to "noise" while `confidence` still held the discarded top
+        # class's score, so an exported record read "noise at 0.47" where 0.47
+        # was in fact the eclipsing-binary probability.
+        cls["raw_model"] = {"label": classes[top], "confidence": round(float(proba[top]), 3)}
+        cls["confidence"] = cls["probabilities"].get("noise", 0.0)
         cls["note"] = (f"No transit signal found (SNR≈{snr:.1f}, no clear in-transit "
                        "points) — flat / noise-dominated light curve, reported as noise. "
                        "The vetting checks below need a real signal to be meaningful.")
@@ -287,7 +345,9 @@ def _analyze_raw(raw, tic_id, tm, _t0, deep: bool = False) -> dict:
         "search_note": search_note,
         "classification": cls,
         "cnn": cnn,
-        "parameters": {k: rnd(v) for k, v in feats.items()},
+        # `testable`/`n_points` are nested dicts for the UI's vetting cards, not
+        # scalar measurements — keep them out of the flat parameters table.
+        "parameters": {k: rnd(v) for k, v in feats.items() if not isinstance(v, dict)},
         "uncertainties": uncertainties,
         "diagnostics": _diagnostics(feats),
         "charts": {
@@ -303,8 +363,18 @@ def _analyze_raw(raw, tic_id, tm, _t0, deep: bool = False) -> dict:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": os.path.exists(MODEL_PATH),
-            "cached_targets": len(os.listdir(CACHE_DIR))}
+    # model_loaded reports whether the model actually LOADS, not merely that the
+    # file exists — a present-but-unreadable model used to report a healthy server.
+    try:
+        get_model()
+        loaded = True
+    except Exception:
+        loaded = False
+    try:
+        n = len([f for f in os.listdir(CACHE_DIR) if f.endswith(".json")])
+    except OSError:
+        n = 0
+    return {"status": "ok", "model_loaded": loaded, "cached_targets": n}
 
 
 @app.get("/popular")
@@ -338,19 +408,33 @@ def analyze(tic_id: str, refresh: bool = False, deep: bool = False):
         try:
             with open(cp) as f:
                 out = json.load(f)
-            out["cached"] = True
-            return _finite(out)
+            stamp = out.get("_cache") or {}
+            # Only serve a cached verdict that came from THIS schema and THIS model.
+            # A stale blob is treated exactly like a corrupt one: recompute.
+            if stamp.get("schema") == CACHE_SCHEMA and stamp.get("model") == _model_stamp():
+                out["cached"] = True
+                return _finite(out)
         except (ValueError, OSError):
             pass          # corrupt/truncated cache -> fall through and recompute (self-heals)
     try:
         out = _finite(run_analysis(tic_id, deep=deep))   # deep = thorough 3-min search
     except Exception as e:
         return {"tic_id": tic_id, "error": f"{type(e).__name__}: {e}"}
-    # atomic write: a crash mid-write can never leave a truncated file that 500s forever
-    tmp = cp + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(out, f)
-    os.replace(tmp, cp)
+    out["_cache"] = {"schema": CACHE_SCHEMA, "model": _model_stamp()}
+    # Atomic write via a PROCESS+THREAD-UNIQUE temp name: /analyze is a sync def, so
+    # FastAPI runs concurrent calls in a real threadpool and a shared "<cp>.tmp"
+    # would let two requests clobber each other's partial file.
+    # Persistence must never fail a request that already produced a good result.
+    tmp = f"{cp}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump(out, f)
+        os.replace(tmp, cp)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
     return out
 
 
@@ -362,13 +446,26 @@ async def analyze_file(request: Request, name: str = "upload.fits"):
     data = await request.body()
     if not data:
         return {"error": "empty file"}
-    updir = os.path.join(os.path.dirname(HERE), "data", "uploads")
-    os.makedirs(updir, exist_ok=True)
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name) or "upload.fits"
-    path = os.path.join(updir, safe)
-    with open(path, "wb") as f:
-        f.write(data)
+    # The whole pipeline (lk.read + search + torch) is blocking and takes 10-90 s.
+    # This handler is `async def` (it must be, to await the body), so running that
+    # work inline would occupy the event loop and freeze EVERY other client for the
+    # duration. Hand it to the threadpool instead.
+    return await run_in_threadpool(_analyze_upload, data, safe)
+
+
+def _analyze_upload(data: bytes, safe: str):
+    """Blocking half of /analyze-file. Runs in a worker thread."""
+    updir = os.path.join(os.path.dirname(HERE), "data", "uploads")
+    path = None
     try:
+        os.makedirs(updir, exist_ok=True)
+        # The client-supplied name is a LABEL only — never the on-disk path
+        # (a name of ".." or "." makes open() raise IsADirectoryError, which
+        # escaped as a 500 traceback instead of this handler's JSON error).
+        fd, path = tempfile.mkstemp(suffix=".fits", dir=updir)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
         import lightkurve as lk
         tm = {}
         _t0 = time.perf_counter()
@@ -382,6 +479,12 @@ async def analyze_file(request: Request, name: str = "upload.fits"):
         return _finite(_analyze_raw(raw, safe, tm, _t0))
     except Exception as e:
         return {"tic_id": safe, "error": f"{type(e).__name__}: {e}"}
+    finally:
+        if path:                     # don't let uploads/ grow without bound
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
 
 @app.on_event("startup")

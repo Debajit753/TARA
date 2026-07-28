@@ -1,5 +1,6 @@
 """Stage 2 — search for periodic transit-like dips (BLS and TLS)."""
 import os
+import signal
 import numpy as np
 
 
@@ -74,38 +75,78 @@ def deep_search(lc, cap_seconds=180, min_period=0.5, max_period=15.0):
     with TLS's proper transit statistics, so it can recover the real period even
     when it isn't the tallest BLS peak.
 
-    Wall-clock capped: runs in a worker thread and returns None if it can't finish
-    in `cap_seconds` (the caller then keeps the fast result). ~60-120 s on a cool
-    machine; on a thermally-throttled fanless laptop it will hit the cap — run the
-    backend on a cooler machine / cloud for the deep path.
-    """
-    import concurrent.futures as _cf
+    Wall-clock capped: runs in a separate PROCESS and returns None if it can't
+    finish in `cap_seconds` (the caller then keeps the fast result). ~60-120 s on
+    a cool machine; on a thermally-throttled fanless laptop it will hit the cap.
 
-    def _run():
+    A process, not a thread: TLS itself fans out to a worker pool, and a timed-out
+    thread cannot be killed — every timeout used to leave (cpu_count-2) CPU-bound
+    workers running to completion, starving the normal fast path. The child is put
+    in its own process group so the timeout can kill the whole tree, TLS pool
+    included.
+    """
+    import multiprocessing as mp
+    import queue as _queue
+
+    t = np.ascontiguousarray(lc.time.value, dtype="float64")
+    f = np.ascontiguousarray(lc.flux.value, dtype="float64")
+    m = np.isfinite(t) & np.isfinite(f)
+    t, f = t[m], f[m]
+    if t.size < 50:
+        return None
+
+    ctx = mp.get_context("spawn")
+    q = ctx.Queue()
+    nthreads = max(1, (os.cpu_count() or 2) - 2)
+    # NOT daemon=True: a daemonic process may not create children, and TLS fans
+    # out to its own pool. Cleanup is explicit via _kill_tree() instead.
+    p = ctx.Process(target=_deep_worker,
+                    args=(t, f, min_period, max_period, nthreads, q), daemon=False)
+    p.start()
+    try:
+        ok, payload = q.get(timeout=cap_seconds)
+    except (_queue.Empty, Exception):
+        ok, payload = False, None
+    finally:
+        _kill_tree(p)
+    return payload if ok else None
+
+
+def _kill_tree(p):
+    """Kill the deep-search child and anything it spawned, then reap it."""
+    try:
+        if p.is_alive():
+            killed = False
+            if hasattr(os, "killpg"):
+                try:
+                    os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+                    killed = True
+                except (OSError, AttributeError):
+                    killed = False
+            if not killed:
+                p.terminate()          # Windows / no process groups
+        p.join(5)
+    except Exception:
+        pass
+
+
+def _deep_worker(t, f, pmin, pmax, nthreads, q):
+    """Module-level so it is picklable under the 'spawn' start method."""
+    try:
+        os.setsid()      # own process group -> parent can kill the whole tree
+    except (OSError, AttributeError):
+        pass
+    try:
         from transitleastsquares import transitleastsquares
-        t = np.ascontiguousarray(lc.time.value, dtype="float64")
-        f = np.ascontiguousarray(lc.flux.value, dtype="float64")
-        m = np.isfinite(t) & np.isfinite(f)
-        res = transitleastsquares(t[m], f[m]).power(
-            period_min=min_period, period_max=max_period,
+        res = transitleastsquares(t, f).power(
+            period_min=pmin, period_max=pmax,
             oversampling_factor=3, duration_grid_step=1.05,   # denser = more thorough
-            use_threads=max(1, (os.cpu_count() or 2) - 2),    # leave cores for the server if this orphans
-            show_progress_bar=False)
-        return {
+            use_threads=nthreads, show_progress_bar=False)
+        q.put((True, {
             "period": float(res.period), "t0": float(res.T0),
             "depth": float(abs(1.0 - res.depth)), "duration": float(res.duration),
             "power": float(res.SDE),
             "period_uncertainty": float(getattr(res, "period_uncertainty", float("nan"))),
-        }
-
-    # NOTE: manage the executor manually — a `with` block's __exit__ calls
-    # shutdown(wait=True), which would BLOCK the request until TLS finished even
-    # after we time out. shutdown(wait=False) returns immediately; the orphaned
-    # worker keeps running (Python can't kill a thread) but the REQUEST is unblocked.
-    ex = _cf.ThreadPoolExecutor(max_workers=1)
-    try:
-        return ex.submit(_run).result(timeout=cap_seconds)
-    except _cf.TimeoutError:
-        return None          # over budget -> caller falls back to fast_search
-    finally:
-        ex.shutdown(wait=False)
+        }))
+    except Exception as e:
+        q.put((False, f"{type(e).__name__}: {e}"))

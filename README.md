@@ -1,4 +1,4 @@
-<h1 align="center"> TARA — Transit Analysis & Recognition AI</h1>
+# TARA — Transit Analysis & Recognition AI
 
 > An AI system that **detects and classifies exoplanet transits** in noisy TESS light curves — end to end, from a raw star to an honest verdict.
 
@@ -141,11 +141,11 @@ tara/                              (this folder = the repository root)
 │   │   ├── models/
 │   │   │   ├── tabular/model.joblib          RandomForest v3.1 (400 trees, 12 features, 4 classes)
 │   │   │   └── mixed/cnn_mixed_seed{1..5}.pt + scalar_norm_mixed.npz + calibration.json
-│   │   └── data/                  10 demo star caches + popular_stars.json
+│   ├── data/                      10 demo star caches + popular_stars.json
 │   └── train/                     dataset-build + training scripts
 ├── frontend/                      the dashboard — dash-workspace.html + about.html
 │                                  (vanilla HTML/CSS/JS + compiled Tailwind, no build server)
-├── notebooks/                     Colab / Kaggle training notebooks
+├── notebooks/                     Colab / Kaggle training notebooks (how the models were built)
 ├── docs/                          architecture.md · research paper (PDF) · RUN-ON-WINDOWS · assets/
 ├── start/                         setup.sh · setup.bat  (environment setup)
 └── requirements.txt · quickstart.py · dev_check.py
